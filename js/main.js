@@ -19,6 +19,11 @@ function route() {
   var arg = parts.slice(1).join("/");
   if (!game && page != "settings" && page != "help" && page != "glossary") page = "newgame";
   if (!PAGES[page]) page = "dashboard";
+  // if the browser kept an old copy of data.js the new pages can't work
+  if (!TEMPLATES.A.constitution || typeof CONST_FIELDS == "undefined") {
+    $("main").innerHTML = "<h1>Old files</h1><p>Your browser is still using files from the old version of Nationstate. Press <b>Ctrl+F5</b> (or Cmd+Shift+R on a Mac) to reload properly. If you unzipped the new version on top of the old folder, delete the old folder and unzip again.</p>";
+    return;
+  }
   afterRender = [];
   var html = "";
   try {
@@ -232,7 +237,11 @@ window.onload = function () {
   // carry on from the autosave if there is one
   try {
     var raw = localStorage.getItem("ngs_autosave");
-    if (raw) { game = JSON.parse(raw).game; lastSaved = game.week; }
+    if (raw) {
+      var sv = JSON.parse(raw).game;
+      // saves from an older version don't have the new stuff, so don't load them by themselves
+      if (sv && sv.version == GAME_VERSION) { game = sv; lastSaved = game.week; }
+    }
   } catch (e) { game = null; }
   route();
 };

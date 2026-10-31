@@ -48,7 +48,10 @@ PAGES.newgame = function () {
   h += "<p>Welcome to <b>Nationstate</b>, a turn-based simulator where you govern a country one week at a time. ";
   h += "Start from one of the ready-made countries, or build your own: its name, flag, land, people, parties and the whole constitution. ";
   h += "Every choice changes how the game plays. A democracy has to win elections, a dictatorship has to keep the army and the streets on its side.</p>";
-  if (localStorage.getItem("ngs_autosave")) h += "<div class='notice'>You have a game in progress. <a href='javascript:loadSlot(\"ngs_autosave\")'>Continue it</a> or start a new one below.</div>";
+  var auto = null;
+  try { auto = JSON.parse(localStorage.getItem("ngs_autosave") || "null"); } catch (e) { auto = null; }
+  if (auto && auto.game && auto.game.version == GAME_VERSION) h += "<div class='notice'>You have a game in progress. <a href='javascript:loadSlot(\"ngs_autosave\")'>Continue it</a> or start a new one below.</div>";
+  else if (auto) h += "<div class='notice'>Your last game was made with an older version (" + esc(auto.game ? auto.game.version : "?") + ") and can't be continued in this one. Start a new nation below.</div>";
 
   // ---- 1. starting point
   h += "<h2>1. Starting point</h2><p class='small'>Picking one fills in everything below with that country's numbers. Then change whatever you like.</p>";
