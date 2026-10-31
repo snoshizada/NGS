@@ -1,8 +1,8 @@
 // data.js - all the game content (countries, parties, ministries etc)
 // money is in BILLIONS, people are in MILLIONS unless it says otherwise
 
-var GAME_VERSION = "0.1.0";
-var CONTENT_VERSION = "0.1.0";
+var GAME_VERSION = "0.2.0";
+var CONTENT_VERSION = "0.2.0";
 
 // the 15 ministries from the plan
 var MINISTRIES = [
@@ -122,7 +122,12 @@ var TEMPLATES = {
     seats: 150,
     majority: 76,
     confidenceRule: true,
-    amendment: "Two-thirds of parliament (100 of 150 seats) and a national referendum",
+    constitution: {
+      executive: "pm", headOfState: "monarch_const", legislature: "elected", chambers: 1, upperHouse: "regional", legPower: "full",
+      seats: 150, electionSystem: "dhondt", elections: "free", partySystem: "multi", termYears: 4, termLimit: 0, confidenceRule: true,
+      amendThreshold: 0.667, referendum: true, fiscalRule: 0, centralBankIndependent: true, judiciary: "independent", territory: "unitary",
+      press: "free", assembly: "free", votingAge: 18, religion: "tolerant", emergency: "limited", economy: "mixed", leaderTitle: ""
+    },
     regions: [
       { name: "Capital Region", pop: 2.1, income: 1.25, unemp: 0.85, seats: 52 },
       { name: "Northmark", pop: 1.4, income: 0.9, unemp: 1.15, seats: 34 },
@@ -157,7 +162,12 @@ var TEMPLATES = {
     seats: 200,
     majority: 101,
     confidenceRule: false,
-    amendment: "Three-fifths of congress (120 of 200 seats) and approval by a majority of regional governments",
+    constitution: {
+      executive: "president", headOfState: "same", legislature: "elected", chambers: 2, upperHouse: "regional", legPower: "full",
+      seats: 200, electionSystem: "fptp", elections: "free", partySystem: "multi", termYears: 4, termLimit: 2, confidenceRule: false,
+      amendThreshold: 0.6, referendum: false, fiscalRule: 0, centralBankIndependent: true, judiciary: "independent", territory: "federal",
+      press: "free", assembly: "free", votingAge: 18, religion: "tolerant", emergency: "limited", economy: "market", leaderTitle: ""
+    },
     regions: [
       { name: "Aurel Capital District", pop: 9.5, income: 1.5, unemp: 0.8, seats: 50 },
       { name: "Costa Verde", pop: 11.0, income: 1.0, unemp: 0.95, seats: 52 },
@@ -191,7 +201,12 @@ var TEMPLATES = {
     seats: 120,
     majority: 61,
     confidenceRule: true,
-    amendment: "Two-thirds of parliament (80 of 120 seats) and a ruling from the Constitutional Court",
+    constitution: {
+      executive: "pm", headOfState: "president_indirect", legislature: "elected", chambers: 1, upperHouse: "regional", legPower: "full",
+      seats: 120, electionSystem: "national", elections: "free", partySystem: "multi", termYears: 4, termLimit: 0, confidenceRule: true,
+      amendThreshold: 0.667, referendum: false, fiscalRule: 3, centralBankIndependent: true, judiciary: "independent", territory: "unitary",
+      press: "free", assembly: "free", votingAge: 18, religion: "secular", emergency: "limited", economy: "mixed", leaderTitle: ""
+    },
     regions: [
       { name: "Kessel Metropolitan", pop: 3.2, income: 1.3, unemp: 0.85, seats: 40 },
       { name: "Upper Morva", pop: 2.4, income: 0.9, unemp: 1.1, seats: 30 },
@@ -217,29 +232,88 @@ var TEMPLATES = {
 // effects are coded in sim.js applyPolicyEffect() because I couldnt work out a nicer way
 var POLICIES = [
   { id: "minwage", name: "National minimum wage", ministry: "labour", instrument: "Bill", param: "Hourly rate as % of median wage", min: 0, max: 80, def: 50, unit: "%",
+    lean: -0.6, alwaysOn: true,
     desc: "Sets a wage floor. Raises pay for low earners, can cost jobs in low-productivity sectors (retail, agriculture).", supporters: "Unions, left parties", opponents: "Business groups, right parties" },
-  { id: "rentcap", name: "Rent controls", ministry: "housing", instrument: "Bill", param: "Max annual rent increase", min: 0, max: 20, def: 10, unit: "%",
+  { id: "rentcap", lean: -0.7, alwaysOn: true, name: "Rent controls", ministry: "housing", instrument: "Bill", param: "Max annual rent increase", min: 0, max: 20, def: 10, unit: "%",
     desc: "Caps rent rises. Helps renters now, reduces new construction over time.", supporters: "Renters, left parties", opponents: "Landlords, construction" },
-  { id: "energysub", name: "Household energy subsidy", ministry: "energy", instrument: "Budget line", param: "Annual cost", min: 0, max: 20, def: 0, unit: "bn",
+  { id: "energysub", lean: -0.3, name: "Household energy subsidy", ministry: "energy", instrument: "Budget line", param: "Annual cost", min: 0, max: 20, def: 0, unit: "bn",
     desc: "Pays part of household energy bills. Lowers inflation a bit, costs money.", supporters: "Everyone using energy", opponents: "Fiscal hawks, greens" },
-  { id: "hospstaff", name: "Hospital staffing programme", ministry: "health", instrument: "Administrative programme", param: "Extra recruits per year (thousands)", min: 0, max: 20, def: 0, unit: "k",
+  { id: "hospstaff", lean: -0.4, name: "Hospital staffing programme", ministry: "health", instrument: "Administrative programme", param: "Extra recruits per year (thousands)", min: 0, max: 20, def: 0, unit: "k",
     desc: "Recruits and trains extra clinical staff. Each 1,000 staff cost about 0.07bn a year at average pay. Capacity rises slowly as staff are trained.", supporters: "Health unions, patients", opponents: "Treasury" },
-  { id: "infra", name: "National infrastructure programme", ministry: "transport", instrument: "Bill", param: "Extra capital spending per year", min: 0, max: 30, def: 0, unit: "bn",
+  { id: "infra", lean: -0.3, name: "National infrastructure programme", ministry: "transport", instrument: "Bill", param: "Extra capital spending per year", min: 0, max: 30, def: 0, unit: "bn",
     desc: "Builds roads, rail and grid. Adds demand now and productivity later.", supporters: "Construction, regions", opponents: "Fiscal hawks" },
-  { id: "pensionidx", name: "Pension uprating", ministry: "labour", instrument: "Bill", param: "One-off pension increase", min: -10, max: 20, def: 0, unit: "%",
+  { id: "pensionidx", lean: -0.2, name: "Pension uprating", ministry: "labour", instrument: "Bill", param: "One-off pension increase", min: -10, max: 20, def: 0, unit: "%",
     desc: "Changes the level of the state pension. Over-65s care about this a lot.", supporters: "Pensioners", opponents: "Younger taxpayers" },
-  { id: "nationalise", name: "Nationalise energy utilities", ministry: "energy", instrument: "Bill", param: "Compensation paid (bn)", min: 0, max: 60, def: 0, unit: "bn",
+  { id: "nationalise", lean: -1, name: "Nationalise energy utilities", ministry: "energy", instrument: "Bill", param: "Compensation paid (bn)", min: 0, max: 60, def: 0, unit: "bn",
     desc: "Brings energy firms into public ownership. Costs compensation (added to debt). State can cap prices but efficiency may drop.", supporters: "Left parties", opponents: "Business, right parties" },
-  { id: "privatise", name: "Privatise rail operations", ministry: "transport", instrument: "Bill", param: "Sale proceeds (bn)", min: 0, max: 40, def: 0, unit: "bn",
+  { id: "privatise", lean: 1, name: "Privatise rail operations", ministry: "transport", instrument: "Bill", param: "Sale proceeds (bn)", min: 0, max: 40, def: 0, unit: "bn",
     desc: "Sells rail operations. Proceeds reduce debt. Transport spending falls but service quality can drop.", supporters: "Right parties, investors", opponents: "Unions, left parties" },
-  { id: "conscription", name: "Military conscription", ministry: "defence", instrument: "Bill", param: "Months of service", min: 0, max: 18, def: 0, unit: "months",
+  { id: "conscription", lean: 0.4, name: "Military conscription", ministry: "defence", instrument: "Bill", param: "Months of service", min: 0, max: 18, def: 0, unit: "months",
     desc: "Young people serve in the forces. Raises readiness, reduces labour supply, unpopular with the young.", supporters: "Defence lobby, nationalists", opponents: "Young people, liberals" },
-  { id: "immigration", name: "Skilled immigration quota", ministry: "interior", instrument: "Regulation", param: "Work visas per year (thousands)", min: 0, max: 200, def: 20, unit: "k",
+  { id: "immigration", lean: 0.3, alwaysOn: true, name: "Skilled immigration quota", ministry: "interior", instrument: "Regulation", param: "Work visas per year (thousands)", min: 0, max: 200, def: 20, unit: "k",
     desc: "Lets more workers in. Grows the labour force and GDP; some voters dislike it.", supporters: "Business, liberals", opponents: "Nationalists" },
-  { id: "freeschool", name: "Free school meals and childcare", ministry: "education", instrument: "Bill", param: "Annual cost", min: 0, max: 10, def: 0, unit: "bn",
+  { id: "freeschool", lean: -0.5, name: "Free school meals and childcare", ministry: "education", instrument: "Bill", param: "Annual cost", min: 0, max: 10, def: 0, unit: "bn",
     desc: "Helps families with children and raises participation of parents in work.", supporters: "Families, left parties", opponents: "Fiscal hawks" },
-  { id: "emissions", name: "Industrial emissions standard", ministry: "environment", instrument: "Regulation", param: "Required cut by 2030", min: 0, max: 60, def: 0, unit: "%",
-    desc: "Forces cleaner industry. Costs manufacturers and energy firms, pleases green voters.", supporters: "Greens, young voters", opponents: "Manufacturing, energy" }
+  { id: "emissions", lean: -0.5, name: "Industrial emissions standard", ministry: "environment", instrument: "Regulation", param: "Required cut by 2030", min: 0, max: 60, def: 0, unit: "%",
+    desc: "Forces cleaner industry. Costs manufacturers and energy firms, pleases green voters.", supporters: "Greens, young voters", opponents: "Manufacturing, energy" },
+  // ---- added in 0.2 ----
+  { id: "ubi", lean: -0.8, name: "Universal basic income", ministry: "labour", instrument: "Bill", param: "Annual cost", min: 0, max: 100, def: 0, unit: "bn",
+    desc: "Pays every adult the same amount. Big help for the poorest, very expensive, slightly fewer people work.", supporters: "Left parties, poorer voters", opponents: "Fiscal hawks, richer voters" },
+  { id: "childbenefit", lean: -0.4, name: "Child benefit", ministry: "labour", instrument: "Budget line", param: "Annual cost", min: 0, max: 20, def: 0, unit: "bn",
+    desc: "Cash for families with children. Helps families, nudges the birth rate up.", supporters: "Families", opponents: "Fiscal hawks" },
+  { id: "wealthtax", lean: -0.8, name: "Wealth tax", ministry: "finance", instrument: "Bill", param: "Annual rate on large fortunes", min: 0, max: 5, def: 0, unit: "%",
+    desc: "Taxes the wealth of the richest. Raises money but some capital leaves and investment falls.", supporters: "Left parties", opponents: "Richest 20%, business" },
+  { id: "sugartax", lean: -0.2, name: "Sugar and junk food tax", ministry: "health", instrument: "Regulation", param: "Tax rate", min: 0, max: 40, def: 0, unit: "%",
+    desc: "Raises a little money and slowly cuts demand on hospitals. Poorer households pay most of it.", supporters: "Doctors, health groups", opponents: "Food industry, tabloids" },
+  { id: "tuition", lean: -0.4, name: "Free university tuition", ministry: "education", instrument: "Bill", param: "Annual cost", min: 0, max: 15, def: 0, unit: "bn",
+    desc: "Government pays university fees. Raises skills and productivity over time.", supporters: "Students, young voters", opponents: "Fiscal hawks" },
+  { id: "retireage", lean: 0.3, alwaysOn: true, name: "State pension age", ministry: "labour", instrument: "Bill", param: "Age", min: 55, max: 72, def: 65, unit: "years",
+    desc: "Raising it saves about 4% of pension costs per year of age and keeps more people working. Older voters hate it.", supporters: "Treasury, business", opponents: "Pensioners, unions" },
+  { id: "surveillance", lean: 0.3, name: "Police surveillance powers", ministry: "interior", instrument: "Bill", param: "Strength of powers", min: 0, max: 100, def: 0, unit: "/100",
+    desc: "Phone and internet monitoring, cameras. Cuts crime a bit, reduces freedom. Independent courts block anything above 40.", supporters: "Police, security hawks", opponents: "Liberals, civil rights groups" },
+  { id: "drugs", lean: 0.1, name: "Drug law reform", ministry: "justice", instrument: "Bill", param: "0 = illegal, 1 = decriminalised, 2 = legal and taxed", min: 0, max: 2, def: 0, unit: "",
+    desc: "Lighter drug laws cut crime figures and (if legal) raise tax. Social conservatives object.", supporters: "Liberals, young voters", opponents: "Social conservatives, religious groups" },
+  { id: "guncontrol", lean: -0.1, alwaysOn: true, name: "Gun control", ministry: "interior", instrument: "Bill", param: "Strictness", min: 0, max: 100, def: 60, unit: "/100",
+    desc: "Stricter rules cut violent crime a little. Rural areas tend to oppose them.", supporters: "Cities, police chiefs", opponents: "Rural voters, gun owners" },
+  { id: "landreform", lean: -0.8, name: "Land reform", ministry: "agriculture", instrument: "Bill", param: "Compensation paid to landowners (bn)", min: 0, max: 40, def: 0, unit: "bn",
+    desc: "Buys big estates and hands land to small farmers. Poorer families gain income, farm output dips for a while.", supporters: "Rural poor, left parties", opponents: "Landowners, right parties" },
+  { id: "housingbuild", lean: -0.4, name: "Public housing programme", ministry: "housing", instrument: "Administrative programme", param: "Annual capital spending", min: 0, max: 30, def: 0, unit: "bn",
+    desc: "Builds social housing. Boosts construction and makes housing more affordable.", supporters: "Renters, construction", opponents: "Fiscal hawks" },
+  { id: "greenenergy", lean: -0.3, name: "Renewable energy investment", ministry: "energy", instrument: "Administrative programme", param: "Annual investment", min: 0, max: 30, def: 0, unit: "bn",
+    desc: "Wind, solar and grid storage. Cuts emissions and makes the country less exposed to energy shocks.", supporters: "Greens, young voters", opponents: "Fossil fuel industry" },
+  { id: "anticorruption", lean: 0, name: "Anti-corruption agency", ministry: "justice", instrument: "Bill", param: "Annual budget", min: 0, max: 3, def: 0, unit: "bn",
+    desc: "Investigates officials. Lowers corruption, which improves tax collection and trust.", supporters: "Almost everyone (in public)", opponents: "Corrupt officials" }
+];
+
+// ---- constitution builder: every option the player can pick ----
+// each field: id, name, group, type (select/number/text), options [value, label]
+var CONST_FIELDS = [
+  { id: "executive", group: "Who rules", name: "Head of government (that's you)", options: [["pm", "Prime minister chosen by the legislature"], ["president", "President elected by the people"], ["monarch", "Hereditary monarch"], ["partyleader", "Leader of the ruling party"], ["junta", "Military council"]] },
+  { id: "headOfState", group: "Who rules", name: "Head of state", options: [["same", "Same person as head of government"], ["monarch_const", "Ceremonial monarch"], ["monarch_abs", "Ruling monarch with real power"], ["president_indirect", "Ceremonial president chosen by the legislature"], ["president_elected", "Directly elected president"]] },
+  { id: "leaderTitle", group: "Who rules", name: "Your title (blank = automatic)", type: "text" },
+  { id: "termYears", group: "Who rules", name: "Term length (years)", type: "number", min: 2, max: 7 },
+  { id: "termLimit", group: "Who rules", name: "Term limit for the head of government (0 = none)", type: "number", min: 0, max: 5 },
+  { id: "emergency", group: "Who rules", name: "Emergency powers", options: [["none", "None"], ["limited", "Limited, expire after 90 days"], ["broad", "Broad - can rule by decree"]] },
+  { id: "legislature", group: "Legislature", name: "Legislature", options: [["elected", "Elected"], ["appointed", "Appointed by the government"], ["none", "No legislature - rule by decree"]] },
+  { id: "legPower", group: "Legislature", name: "Power of the legislature", options: [["full", "Full - laws need its majority"], ["advisory", "Advisory - government can override it"], ["rubber", "Rubber stamp - always agrees"]] },
+  { id: "chambers", group: "Legislature", name: "Chambers", options: [[1, "One chamber"], [2, "Two chambers"]] },
+  { id: "upperHouse", group: "Legislature", name: "Upper chamber (if two)", options: [["regional", "Represents the regions"], ["elected", "Elected nationally"], ["appointed", "Appointed by the government"]] },
+  { id: "seats", group: "Legislature", name: "Seats in the (lower) chamber", type: "number", min: 30, max: 650 },
+  { id: "confidenceRule", group: "Legislature", name: "Government needs the legislature's confidence", options: [[true, "Yes"], [false, "No"]] },
+  { id: "elections", group: "Elections", name: "Elections", options: [["free", "Free and fair"], ["restricted", "Held, but tilted toward the government"], ["none", "No elections"]] },
+  { id: "electionSystem", group: "Elections", name: "Electoral system", options: [["dhondt", "Proportional by region (D'Hondt)"], ["national", "National list proportional, 5% threshold"], ["fptp", "First past the post districts"], ["mixed", "Mixed: half districts, half national list"]] },
+  { id: "partySystem", group: "Elections", name: "Political parties", options: [["multi", "Many parties allowed"], ["single", "Only the ruling party is legal"]] },
+  { id: "votingAge", group: "Elections", name: "Voting age", type: "number", min: 16, max: 21 },
+  { id: "amendThreshold", group: "Changing the constitution", name: "Votes needed to amend", options: [[0.5, "Simple majority"], [0.6, "Three-fifths"], [0.667, "Two-thirds"], [0.75, "Three-quarters"]] },
+  { id: "referendum", group: "Changing the constitution", name: "Amendments need a referendum", options: [[true, "Yes"], [false, "No"]] },
+  { id: "judiciary", group: "Rights and institutions", name: "Courts", options: [["independent", "Independent - can strike down laws"], ["partial", "Partly independent"], ["controlled", "Controlled by the government"]] },
+  { id: "press", group: "Rights and institutions", name: "Press", options: [["free", "Free press"], ["restricted", "Restricted - criticism is risky"], ["state", "State-controlled media"]] },
+  { id: "assembly", group: "Rights and institutions", name: "Protest and assembly", options: [["free", "Free"], ["restricted", "Needs a permit"], ["banned", "Banned"]] },
+  { id: "religion", group: "Rights and institutions", name: "Religion and state", options: [["secular", "Strictly secular state"], ["tolerant", "Tolerant, no official religion"], ["state", "Official state religion"]] },
+  { id: "centralBankIndependent", group: "Rights and institutions", name: "Central bank independent", options: [[true, "Yes"], [false, "No"]] },
+  { id: "territory", group: "Economy and territory", name: "Regions", options: [["unitary", "Unitary - run from the capital"], ["devolved", "Devolved - regions run some services"], ["federal", "Federal - strong regional governments"]] },
+  { id: "economy", group: "Economy and territory", name: "Economic system", options: [["market", "Free market"], ["mixed", "Mixed economy"], ["planned", "Planned economy - state runs big industry"]] },
+  { id: "fiscalRule", group: "Economy and territory", name: "Fiscal rule: max deficit % of GDP (0 = none)", type: "number", min: 0, max: 6 }
 ];
 
 // treaty types for foreign affairs
@@ -278,7 +352,12 @@ var GLOSSARY = {
   "Poverty rate": "Share of people with disposable income below 60% of the median.",
   "Gini": "Income inequality measure from 0 (equal) to 100 (one person has everything).",
   "Readiness": "How prepared the armed forces are, 0-100.",
-  "Current account": "Exports minus imports (simplified), billions per year."
+  "Current account": "Exports minus imports (simplified), billions per year.",
+  "Democracy index": "0-100 score of how democratic the constitution is: free elections, many parties, a real legislature, independent courts, free press and protest. Mass surveillance lowers it.",
+  "Legitimacy": "0-100. How far people accept your right to rule. Comes from democracy, approval, low corruption and winning wars. Low legitimacy makes coups and revolutions more likely.",
+  "Unrest": "0-100. Anger that has nowhere to go. Rises when approval is low, faster if protest is banned or elections are rigged. High unrest brings riots and can end in revolution.",
+  "Army loyalty": "0-100. Follows defence pay and funding, the defence minister and legitimacy. Under 40 the army may launch a coup (much more likely in non-democracies).",
+  "Corruption": "0-100. Grows with weak courts, controlled press and low democracy. Lowers tax collection and productivity. Fight it with an anti-corruption agency."
 };
 
 // tutorial hints for the first 12 weeks

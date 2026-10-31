@@ -47,6 +47,9 @@ function weekDate(g, w) {
 function weekYear(g, w) { if (w === undefined) w = g.week; return g.startYear + Math.floor((w - 1) / 52); }
 function weekOfYear(g, w) { if (w === undefined) w = g.week; return ((w - 1) % 52) + 1; }
 
+// value of a policy if it's switched on, otherwise 0
+function pv(g, id) { var p = g.policies[id]; return p && p.active ? p.value : 0; }
+
 function randomName(g) { return pick(g, FIRST_NAMES) + " " + pick(g, LAST_NAMES); }
 
 function totalPop(g) { var s = 0; for (var i = 0; i < g.regions.length; i++) s += g.regions[i].pop; return s; }
@@ -79,27 +82,49 @@ function newGame(key, opts) {
 
   g.country = {
     name: opts.name || T.name, capital: opts.capital || T.capital,
-    currency: opts.currency || T.currency, symbol: T.currencySymbol,
-    languages: T.languages, flag: opts.flag || T.flag
+    currency: opts.currency || T.currency, symbol: opts.symbol || T.currencySymbol,
+    languages: opts.languages || T.languages, flag: cleanFlag(opts.flag) || T.flag,
+    flagVertical: !!opts.flagVertical, flagImg: cleanFlagImg(opts.flagImg), motto: opts.motto || ""
   };
   if (opts.partyName) {
     for (var i = 0; i < T.parties.length; i++) if (T.parties[i].player) T.parties[i].name = opts.partyName;
   }
 
-  g.constitution = {
-    govType: T.govType, leaderTitle: T.leaderTitle, electionSystem: T.electionSystem,
-    termYears: T.termYears, seats: T.seats, majority: T.majority, confidenceRule: T.confidenceRule,
-    amendmentText: T.amendment,
-    supermajority: key == "B" ? Math.ceil(T.seats * 0.6) : Math.ceil(T.seats * 2 / 3),
-    referendum: key != "B",
-    centralBankIndependent: true,
-    votingAge: 18,
-    fiscalRule: key == "C" ? 3 : 0 // max deficit % of GDP written in the law (0 = none)
-  };
+  // ----- custom nation: change the template before anything gets built -----
+  var cu = opts.custom || {};
+  var oldPop = sum(T.regions.map(function (r) { return r.pop; }));
+  var perCap = T.gdp / oldPop;
+  if (cu.regions && cu.regions.length) {
+    T.regions = cu.regions.slice(0, 10).map(function (r) {
+      var inc = clamp(parseFloat(r.income) || 1, 0.3, 3);
+      return { name: String(r.name || "Region").slice(0, 40), pop: clamp(parseFloat(r.pop) || 1, 0.05, 500), income: inc, unemp: clamp(1.6 - 0.6 * inc, 0.6, 1.6) };
+    });
+  }
+  var newPop = sum(T.regions.map(function (r) { return r.pop; }));
+  if (cu.gdpPerCap) perCap = clamp(parseFloat(cu.gdpPerCap), 1, 200);
+  var scale = newPop * perCap / T.gdp;
+  if (Math.abs(scale - 1) > 1e-9) { for (var k in T.spending) T.spending[k] *= scale; T.gdp = newPop * perCap; }
+  if (cu.debtRatio !== undefined && cu.debtRatio !== "") T.debtRatio = clamp(parseFloat(cu.debtRatio), 0, 3);
+  if (cu.unemployment) T.unemployment = clamp(parseFloat(cu.unemployment), 0.01, 0.4);
+  if (cu.inflation !== undefined && cu.inflation !== "") T.inflation = clamp(parseFloat(cu.inflation), -0.02, 0.3);
+  if (cu.oldShare) T.oldShare = clamp(parseFloat(cu.oldShare), 0.03, 0.4);
+  if (cu.youngShare) T.youngShare = clamp(parseFloat(cu.youngShare), 0.1, 0.5);
+  if (opts.parties && opts.parties.length >= 2) {
+    T.parties = opts.parties.slice(0, 10).map(function (p, i) {
+      return { id: "p" + i, name: String(p.name || "Party " + (i + 1)).slice(0, 50), econ: clamp(parseFloat(p.econ) || 50, 0, 100), social: clamp(parseFloat(p.social) || 50, 0, 100),
+        color: /^#[0-9a-f]{6}$/i.test(p.color) ? p.color : "#777777", seats: Math.max(1, parseInt(p.seats) || 1), inGov: i == 0 || !!p.inGov, player: i == 0 };
+    });
+  }
+
+  // ----- constitution (template, then the player's choices on top) -----
+  var con = copy(T.constitution);
+  if (opts.constitution) for (var k in opts.constitution) con[k] = opts.constitution[k];
+  g.constitution = normalizeConstitution(con, T.regions.length);
 
   // regions
-  g.regions = T.regions.map(function (r) { return { name: r.name, pop: r.pop, income: r.income, unemp: r.unemp, seats: r.seats, protestCooldown: 0 }; });
+  g.regions = T.regions.map(function (r) { return { name: r.name, pop: r.pop, income: r.income, unemp: r.unemp, seats: r.seats || 0, protestCooldown: 0 }; });
   g.pop = { old: T.oldShare, young: T.youngShare, births: 0, deaths: 0, immig: 0, emig: 0 };
+  regionSeats(g);
 
   // difficulty changes starting conditions only (not rules)
   var debtRatio = T.debtRatio, trust = 0;
@@ -128,6 +153,8 @@ function newGame(key, opts) {
   g.taxes0 = copy(T.taxes);
   g.compliance = key == "A" ? 0.95 : (key == "B" ? 0.84 : 0.82);
   if (diff == "hard") g.compliance -= 0.03;
+  g.compliance0 = g.compliance;
+  g.econ.wage0 = g.econ.wage;
 
   // ----- budget -----
   g.budget = { lines: copy(T.spending), lines0: copy(T.spending), emergency: 0, otherRevenue: 0 };
@@ -137,6 +164,8 @@ function newGame(key, opts) {
   for (var i = 0; i < POLICIES.length; i++) g.policies[POLICIES[i].id] = { active: false, value: POLICIES[i].def, since: 0, extra: 0 };
   g.policies.minwage = { active: true, value: key == "A" ? 50 : (key == "B" ? 42 : 45), since: 0, extra: 0 };
   g.policies.immigration = { active: true, value: key == "B" ? 40 : 20, since: 0, extra: 0 };
+  g.policies.retireage = { active: true, value: key == "B" ? 62 : 65, since: 0, extra: 0 };
+  g.policies.guncontrol = { active: true, value: key == "A" ? 75 : (key == "B" ? 30 : 60), since: 0, extra: 0 };
   g.policies0 = copy(g.policies);
   g.flags = { energyPublic: key == "C", railPrivate: false };
 
@@ -187,14 +216,16 @@ function newGame(key, opts) {
   // ----- politics -----
   g.parties = T.parties.map(function (p) {
     return { id: p.id, name: p.name, econ: p.econ, social: p.social, color: p.color, seats: p.seats, inGov: !!p.inGov, player: !!p.player,
-      leader: "", bias: 0, poll: 0, patience: 70, members: Math.round(p.seats * 900) };
+      leader: "", bias: 0, poll: 0, patience: 70, members: Math.round(p.seats * 900), banned: false };
   });
+  rescaleSeats(g, g.constitution.seats); // in case the player picked a different size of parliament
   for (var i = 0; i < g.parties.length; i++) g.parties[i].leader = randomName(g);
   g.leaderName = opts.leaderName || playerParty(g).leader;
   playerParty(g).leader = g.leaderName;
 
   g.politics = {
-    mood: 0, termStart: 1, nextElection: key == "A" ? 140 : (key == "B" ? 150 : 82),
+    mood: 0, termStart: 1, nextElection: key == "A" ? 140 : (key == "B" ? 150 : 82), termsServed: 1,
+    legitimacy: 50, unrest: 0, corruption: 30, corruption0: 30, di: 0, warAfter: 0,
     record: avgGovEcon(g), record0: 0, baseTrust: (key == "A" ? 0.46 : (key == "B" ? 0.48 : 0.34)) + trust,
     elections: [], snapElection: 0, lastConfidence: null
   };
@@ -205,7 +236,10 @@ function newGame(key, opts) {
   makeCabinet(g);
 
   // foreign
-  g.foreign = FOREIGN.map(function (f) { return { id: f.id, name: f.name, gov: f.gov, pop: f.pop, gdp: f.gdp, military: f.military, trade: f.trade, interest: f.interest, relation: f.relation, treaties: [], sanctioned: false, leader: "" }; });
+  g.foreign = FOREIGN.map(function (f) {
+    var dem = ["Parliamentary republic", "Constitutional monarchy", "Presidential republic", "Parliamentary democracy", "Federal republic"].indexOf(f.gov) >= 0;
+    return { id: f.id, name: f.name, gov: f.gov, pop: f.pop, gdp: f.gdp, military: f.military, trade: f.trade, interest: f.interest, relation: f.relation, treaties: [], sanctioned: false, leader: "", democratic: dem, atWar: false };
+  });
   for (var i = 0; i < g.foreign.length; i++) g.foreign[i].leader = randomName(g);
 
   // lists
@@ -220,11 +254,30 @@ function newGame(key, opts) {
   g.laws = [];
   g.urgent = [];
   g.accounts = { months: [], quarters: [] };
+  g.war = null;
+  g.wars = [];
+  g.ministryNames = {};
+  g.upper = null;
+  g.defence.loyalty = 60;
+  // what other countries think of our system of government
+  var di0 = democracyIndex(g);
+  for (var i = 0; i < g.foreign.length; i++) {
+    var fr = g.foreign[i];
+    fr.relation = clamp(fr.relation + (fr.democratic ? (di0 - 85) * 0.25 : (85 - di0) * 0.1), 0, 100);
+    fr.baseRelation = fr.relation;
+  }
 
   // ----- first calculation of the economy so everything is filled in -----
   var f = calcFlows(g, true);
   // set exports so GDP = C + G + I + X - M at the start
   g.econ.exportsBase = T.gdp - f.C - f.G - f.I + f.M;
+  // weird custom countries can end up with negative exports - take it out of investment instead
+  if (g.econ.exportsBase < 0.05 * T.gdp) {
+    var short = 0.05 * T.gdp - g.econ.exportsBase;
+    g.econ.inv0 = Math.max(0.03 * T.gdp, g.econ.inv0 - short);
+    f = calcFlows(g, true);
+    g.econ.exportsBase = T.gdp - f.C - f.G - f.I + f.M;
+  }
   // set non-tax revenue so the starting deficit is believable
   var target = key == "A" ? -0.015 : (key == "B" ? -0.03 : -0.045);
   if (diff == "story") target += 0.01;
@@ -238,6 +291,16 @@ function newGame(key, opts) {
   // cohorts + approval + polls
   initCohorts(g);
   calibratePolls(g);
+  setupLegislature(g);
+
+  // starting stability numbers (at their natural level)
+  var Pp = g.politics;
+  Pp.di = democracyIndex(g);
+  for (var it = 0; it < 300; it++) { var save = g.calm; g.calm = true; regimeWeekly(g); g.calm = save; }
+  Pp.corruption0 = Pp.corruption;
+  g.compliance = g.compliance0;
+  Pp.corruption0 = Pp.corruption;
+  if (!electionsHeld(g)) Pp.nextElection = 0;
 
   // baseline history (5 years) - made up but consistent with the start numbers
   g.baseline = [];
@@ -279,7 +342,15 @@ function makeCabinet(g) {
   }
 }
 
-function minister(g, ministry) { for (var i = 0; i < g.cabinet.length; i++) if (g.cabinet[i].ministry == ministry) return g.cabinet[i]; }
+function minister(g, ministry) {
+  // merged ministries are run by the minister of the one they were merged into
+  for (var guard = 0; guard < 5; guard++) {
+    var m = null;
+    for (var i = 0; i < g.cabinet.length; i++) if (g.cabinet[i].ministry == ministry) m = g.cabinet[i];
+    if (!m || !m.mergedInto) return m;
+    ministry = m.mergedInto;
+  }
+}
 
 function avgGovEcon(g) {
   var gp = govParties(g), s = 0, n = 0;
@@ -299,6 +370,8 @@ function serviceDemand(g, s) {
   var d = P * (s.demandPerHead + g.pop.old * (s.oldDemand || 0) + g.pop.young * (s.youngDemand || 0));
   // health emergency shock
   for (var i = 0; g.shocks && i < g.shocks.length; i++) if (g.shocks[i].type == "health" && s.id == "health") d *= 1 + g.shocks[i].mag;
+  if (s.id == "health" && g.policies) d *= 1 - 0.002 * pv(g, "sugartax");
+  if (s.id == "education" && g.policies) d *= 1 + pv(g, "tuition") / (g.econ.gdp || 100) * 3;
   return d;
 }
 
@@ -312,7 +385,7 @@ function calcFlows(g, initial) {
 
   // ---- wages and incomes ----
   f.W = e.employed * e.wage; // wage bill (bn)
-  f.K = 0.2 * Yprev;         // capital income to households
+  f.K = 0.2 * Yprev * (1 - 0.02 * pv(g, "wealthtax")); // capital income to households (some wealth leaves if taxed)
   f.profits = 0.22 * Yprev * (1 + 0.5 * (e.confidence - 1));
 
   // minimum wage moves income to the bottom quintiles
@@ -328,7 +401,13 @@ function calcFlows(g, initial) {
   f.welfareActual = welfareActual;
   var energySub = pol.energysub.active ? pol.energysub.value : 0;
   var freeSchool = pol.freeschool.active ? pol.freeschool.value : 0;
-  f.transfers = b.pensions + welfareActual + energySub + freeSchool;
+  var ubi = pv(g, "ubi"), childBen = pv(g, "childbenefit");
+  // pension age: each year above 65 saves about 4% of pension costs
+  var pensionsPaid = b.pensions * clamp(1 - 0.04 * (pv(g, "retireage") - g.policies0.retireage.value), 0.5, 1.5);
+  f.pensionsPaid = pensionsPaid;
+  f.transfers = pensionsPaid + welfareActual + energySub + freeSchool + ubi + childBen;
+  // land reform moves some capital income (land rent) from the richest to the poorest
+  var landShift = pv(g, "landreform") * 0.04;
 
   // ---- income tax by quintile (rough effective rates, there are allowances) ----
   var rB = t.incomeBasic / 100, rH = t.incomeHigher / 100, rT = t.incomeTop / 100;
@@ -343,13 +422,13 @@ function calcFlows(g, initial) {
   f.incomeTax = 0; f.payrollTax = 0;
   var D = 0;
   for (var i = 0; i < 5; i++) {
-    var wage = f.W * ws[i], cap = f.K * CAPITAL_SHARE[i];
+    var wage = f.W * ws[i], cap = f.K * CAPITAL_SHARE[i] + (i == 0 ? landShift * 0.6 : (i == 1 ? landShift * 0.4 : (i == 4 ? -landShift : 0)));
     var base = wage + cap;
     if (i == 4) base *= topResp;
     if (i == 3) base *= highResp;
     var itax = base * eff[i] * g.compliance;
     var ptax = wage * payroll * g.compliance;
-    var tr = b.pensions * PENSION_SHARE[i] + welfareActual * WELFARE_SHARE[i] + energySub * ENERGY_SHARE[i] + freeSchool * FAMILY_SHARE[i];
+    var tr = pensionsPaid * PENSION_SHARE[i] + welfareActual * WELFARE_SHARE[i] + energySub * ENERGY_SHARE[i] + freeSchool * FAMILY_SHARE[i] + ubi * 0.2 + childBen * FAMILY_SHARE[i];
     var rentGain = 0;
     if (pol.rentcap.active && i <= 2) rentGain = wage * (10 - pol.rentcap.value) * 0.002;
     var disp = wage + cap + tr - itax - ptax + rentGain;
@@ -370,8 +449,14 @@ function calcFlows(g, initial) {
   f.G = 0;
   for (var i = 0; i < SPENDING_LINES.length; i++) if (!SPENDING_LINES[i].transfer) f.G += b[SPENDING_LINES[i].id];
   f.programmes = programmeCosts(g);
-  f.G += f.programmes.staff + f.programmes.infra;
+  f.G += f.programmes.staff + f.programmes.infra + f.programmes.other;
   f.G += g.budget.emergency;
+  // planned economy: the state does most of the investing
+  var sys = g.constitution.economy;
+  f.stateInv = sys == "planned" ? 0.11 * Yprev : 0;
+  f.G += f.stateInv;
+  f.warCost = g.war ? (g.war.annualCost || Yprev * 0.03) : 0;
+  f.G += f.warCost;
 
   // ---- private investment ----
   var corpEffect = 1 - 0.9 * (t.corp - g.taxes0.corp) / 100;
@@ -381,6 +466,10 @@ function calcFlows(g, initial) {
   var trend = (e.prod / e.prod0) * (e.labourForce / e.L0);
   f.I = e.inv0 * e.price * trend * (1 - 2.5 * (realRate - e.realRate0)) * corpEffect * creditShock * rentEffect * (0.6 + 0.4 * e.confidence);
   if (pol.emissions.active) f.I *= 1 - pol.emissions.value * 0.0008;
+  f.I *= 1 - 0.015 * pv(g, "wealthtax");
+  if (sys == "planned") f.I *= 0.45;
+  if (sys == "market") f.I *= 1.04;
+  if (g.war) f.I *= 0.9;
 
   // ---- trade ----
   var compet = Math.pow(e.foreignPrice / e.price, 0.6) * Math.pow(100 / e.exch, 0.6);
@@ -400,12 +489,20 @@ function calcFlows(g, initial) {
   f.tariffs = f.M * t.tariff / 100;
   f.carbonTax = e.emissions * t.carbon / 1000;
   f.otherRev = g.budget.otherRevenue * e.price;
+  f.wealthTax = pv(g, "wealthtax") / 100 * Yprev * 2.4 * g.compliance * clamp(1 - 0.08 * pv(g, "wealthtax"), 0.5, 1);
+  f.sugarTax = f.C * 0.012 * pv(g, "sugartax") / 100;
+  f.drugTax = pv(g, "drugs") >= 2 ? 0.002 * Yprev : 0;
+  f.stateProfits = sys == "planned" ? 0.045 * Yprev : 0;
   if (g.flags.energyPublic) f.otherRev += 0.004 * Yprev; // dividends from state energy co
   f.payrollTax *= 2; // employer side too (counted only once in disposable income)
   f.revenue = {
     "Personal income tax": f.incomeTax, "Social insurance contributions": f.payrollTax, "VAT": f.vat, "Corporate profit tax": f.corpTax,
     "Property tax": f.propertyTax, "Excise duties": f.excise, "Customs tariffs": f.tariffs, "Carbon tax": f.carbonTax, "Fees, fines and other": f.otherRev
   };
+  if (f.wealthTax) f.revenue["Wealth tax"] = f.wealthTax;
+  if (f.sugarTax) f.revenue["Sugar tax"] = f.sugarTax;
+  if (f.drugTax) f.revenue["Cannabis duty"] = f.drugTax;
+  if (f.stateProfits) f.revenue["State enterprise profits"] = f.stateProfits;
   f.revTotal = 0; for (var k in f.revenue) f.revTotal += f.revenue[k];
 
   // ---- spending ----
@@ -414,8 +511,13 @@ function calcFlows(g, initial) {
   f.spending = {};
   for (var i = 0; i < SPENDING_LINES.length; i++) {
     var L = SPENDING_LINES[i];
-    f.spending[L.name] = L.id == "welfare" ? welfareActual : b[L.id];
+    f.spending[L.name] = L.id == "welfare" ? welfareActual : (L.id == "pensions" ? pensionsPaid : b[L.id]);
   }
+  if (ubi) f.spending["Universal basic income"] = ubi;
+  if (childBen) f.spending["Child benefit"] = childBen;
+  for (var k in f.programmes.lines) f.spending[k] = f.programmes.lines[k];
+  if (f.stateInv) f.spending["State enterprise investment"] = f.stateInv;
+  if (f.warCost) f.spending["War operations"] = f.warCost;
   if (energySub) f.spending["Energy subsidy"] = energySub;
   if (freeSchool) f.spending["Free school meals and childcare"] = freeSchool;
   if (f.programmes.staff) f.spending["Hospital staffing programme"] = f.programmes.staff;
@@ -427,7 +529,7 @@ function calcFlows(g, initial) {
   f.primary = f.balance + f.interest;
 
   // ---- GDP by production (sectors) ----
-  f.productTaxes = f.vat + f.excise + f.tariffs + f.carbonTax;
+  f.productTaxes = f.vat + f.excise + f.tariffs + f.carbonTax + f.sugarTax + f.drugTax;
   f.subsidies = energySub;
   var gvaTotal = f.Y - f.productTaxes + f.subsidies;
   var mods = sectorMods(g), wsum = 0;
@@ -457,12 +559,20 @@ function sectorMods(g) {
   m[8] *= 1 + 0.3 * ((b.health + b.education) / (b0.health + b0.education) - 1);
   if (g.policies.emissions.active) { m[1] *= 1 - g.policies.emissions.value * 0.002; m[2] *= 1 - g.policies.emissions.value * 0.0015; }
   m[2] *= 1 + (g.taxes.tariff - g.taxes0.tariff) * 0.004; // protection helps factories a bit
+  var Y = g.econ.gdp || 1;
+  m[3] *= 1 + pv(g, "housingbuild") / Y * 8;
+  m[1] *= 1 + pv(g, "greenenergy") / Y * 5;
+  m[0] *= 1 - 0.002 * Math.min(20, pv(g, "landreform"));
+  if (g.constitution.economy == "planned") { m[1] *= 1.05; m[2] *= 1.08; m[5] *= 0.85; m[6] *= 0.7; m[7] *= 0.8; }
+  if (g.war) { m[2] *= 1.05; m[4] *= 0.95; m[5] *= 0.95; }
   for (var i = 0; i < m.length; i++) m[i] = clamp(m[i], 0.3, 2);
   return m;
 }
 
 function programmeCosts(g) {
-  var c = { staff: 0, infra: 0 };
+  var c = { staff: 0, infra: 0, other: 0, lines: {} };
+  var progs = [["tuition", "Free university tuition"], ["housingbuild", "Public housing programme"], ["greenenergy", "Renewable energy investment"], ["anticorruption", "Anti-corruption agency"]];
+  for (var i = 0; i < progs.length; i++) { var v = pv(g, progs[i][0]); if (v) { c.other += v; c.lines[progs[i][1]] = v; } }
   var s = g.services.health;
   if (s && s.extraStaff > 0) c.staff = s.extraStaff * g.econ.wage * 1.1 / 1000;
   if (g.policies.infra.active) c.infra = g.policies.infra.value;
@@ -475,6 +585,7 @@ function programmeCosts(g) {
 function advanceWeek(g0) {
   // work on a copy, only commit if everything checks out (step 17)
   var g = copy(g0);
+  currentGame = g;
   g.turnLog = [];
   g.urgent = [];
   g.week++;
@@ -498,11 +609,13 @@ function advanceWeek(g0) {
   if (g.policies.freeschool.active) participation += g.policies.freeschool.value * 0.0015;
   participation += (g.services.health.access - g.services.health.access0) * 0.03;
   var conscripts = g.policies.conscription.active ? totalPop(g) * 0.012 * g.policies.conscription.value / 12 : 0;
-  e.labourForce = totalPop(g) * working * participation - conscripts;
+  participation -= pv(g, "ubi") / e.gdp * 0.15; // some people stop working with a basic income
+  var olderWorkers = totalPop(g) * g.pop.old * 0.012 * (pv(g, "retireage") - g.policies0.retireage.value);
+  e.labourForce = totalPop(g) * working * participation - conscripts + olderWorkers;
   var payrollEffect = 1 - 0.35 * (g.taxes.payroll - g.taxes0.payroll) / 100;
   var mwEffect = 1;
   if (g.policies.minwage.active) mwEffect = 1 - Math.max(0, g.policies.minwage.value - g.policies0.minwage.value) * 0.0015;
-  var labourDemand = (e.gdp / e.price) / e.prod * payrollEffect * mwEffect;
+  var labourDemand = (e.gdp / e.price) / e.prod * payrollEffect * mwEffect * (g.constitution.economy == "planned" ? 1.03 : 1);
   var target = Math.min(labourDemand, e.labourForce * 0.985);
   e.employed += (target - e.employed) * 0.06;
   if (e.employed > e.labourForce * 0.985) e.employed = e.labourForce * 0.985;
@@ -514,6 +627,11 @@ function advanceWeek(g0) {
   prodGrowth += (e.publicCapital - 1) * 0.02;
   if (g.flags.energyPublic) prodGrowth -= 0.001;
   if (g.policies.emissions.active) prodGrowth -= g.policies.emissions.value * 0.00004;
+  if (g.constitution.economy == "planned") prodGrowth -= 0.006;
+  if (g.constitution.economy == "market") prodGrowth += 0.002;
+  prodGrowth += pv(g, "tuition") / e.gdp * 0.03;
+  prodGrowth -= (g.politics.corruption - g.politics.corruption0) * 0.0001;
+  if (g.war) prodGrowth -= 0.002;
   e.prod *= 1 + prodGrowth / 52;
   // public capital: infrastructure spending vs depreciation
   var infraSpend = g.budget.lines.transport + (g.policies.infra.active ? g.policies.infra.value : 0);
@@ -534,9 +652,10 @@ function advanceWeek(g0) {
   var gap = (e.gdp / e.price) / potential - 1;
   var energyShock = 0;
   for (var i = 0; i < g.shocks.length; i++) if (g.shocks[i].type == "energy") energyShock += g.shocks[i].mag;
+  energyShock *= 1 - Math.min(0.6, pv(g, "greenenergy") / e.gdp * 20); // renewables protect against energy shocks
   var publicEnergy = g.flags.energyPublic ? -0.002 : 0;
   var carbonEffect = (g.taxes.carbon - g.taxes0.carbon) * 0.00003;
-  var inflTarget = e.inflExp + 0.35 * gap + energyShock * 0.05 + publicEnergy + carbonEffect;
+  var inflTarget = e.inflExp + 0.35 * gap + energyShock * 0.05 + publicEnergy + carbonEffect + (g.constitution.economy == "planned" ? -0.005 : 0) + (g.war ? 0.01 : 0);
   e.infl += (inflTarget - e.infl) * 0.1;
   e.inflExp += (0.02 - e.inflExp) * 0.003 + (e.infl - e.inflExp) * 0.01;
   // one-off price jumps (VAT changes etc) spread over 4 weeks
@@ -561,7 +680,7 @@ function advanceWeek(g0) {
   refinanceDebt(g);
 
   // carbon/emissions
-  var intensityTarget = 0.15 * (1 - clamp(g.taxes.carbon / 400, 0, 0.4)) * (g.policies.emissions.active ? 1 - g.policies.emissions.value / 100 * 0.6 : 1);
+  var intensityTarget = 0.15 * (1 - clamp(g.taxes.carbon / 400, 0, 0.4)) * (g.policies.emissions.active ? 1 - g.policies.emissions.value / 100 * 0.6 : 1) * (1 - clamp(pv(g, "greenenergy") / e.gdp * 15, 0, 0.5));
   e.emissionsIntensity += (intensityTarget - e.emissionsIntensity) * 0.01;
 
   // 9. public services
@@ -582,13 +701,15 @@ function advanceWeek(g0) {
 
   // 10. foreign governments
   foreignAI(g);
-  // 11. protests, strikes, security
+  // 11. protests, strikes, security, war
   protests(g);
   defence(g);
+  warWeekly(g);
   // 12. politics
   updateApproval(g);
   updatePolls(g);
   politicsWeekly(g);
+  regimeWeekly(g);
 
   // 13. monthly / quarterly / annual accounting
   if (month) monthlyAccounts(g);
@@ -659,7 +780,7 @@ function updatePopulation(g, u) {
   for (var i = 0; i < g.regions.length; i++) {
     var r = g.regions[i];
     var share = r.pop / P;
-    var b = r.pop * (0.0105 - (g.pop.old - 0.2) * 0.02) / 52;
+    var b = r.pop * (0.0105 - (g.pop.old - 0.2) * 0.02 + pv(g, "childbenefit") / g.econ.gdp * 0.02) / 52;
     var d = r.pop * (0.0095 + (g.pop.old - 0.2) * 0.03 - (g.services.health.access - g.services.health.access0) * 0.004) / 52;
     var im = (immQuota * share * (r.income > 1.1 ? 1.4 : 0.9)) / 52;
     var em = r.pop * Math.max(0, 0.002 + (u * r.unemp - g.econ.natU) * 0.05) / 52;
@@ -688,7 +809,8 @@ function updateServices(g) {
     var min = minister(g, def.id == "police" ? "interior" : def.id);
     var comp = min ? min.competence : 0.5;
     // hiring takes time, firing is quicker. good ministers hire faster
-    var maxHire = s.staff * (0.002 + 0.004 * comp);
+    var terr = { unitary: 1.05, devolved: 1, federal: 0.9 }[g.constitution.territory];
+    var maxHire = s.staff * (0.002 + 0.004 * comp) * terr;
     var maxFire = s.staff * 0.006;
     var diff = clamp(target - s.staff, -maxFire, maxHire);
     s.staff += diff;
@@ -710,6 +832,8 @@ function updateServices(g) {
   // crime responds to police access and unemployment
   var u = 1 - g.econ.employed / g.econ.labourForce;
   var crimeTarget = g.crime0 * (1 + (u - g.econ.natU) * 3) * (g.services.police.access0 / g.services.police.access);
+  crimeTarget *= (1 - pv(g, "surveillance") * 0.002) * (1 - 0.04 * pv(g, "drugs")) * (1 - (pv(g, "guncontrol") - g.policies0.guncontrol.value) * 0.001);
+  if (g.constitution.assembly == "banned") crimeTarget *= 0.95;
   crimeTarget = clamp(crimeTarget, g.crime0 * 0.5, g.crime0 * 2);
   g.crime += (crimeTarget - g.crime) * 0.02;
 }
@@ -743,6 +867,7 @@ function initCohorts(g) {
   var shift = g.politics.baseTrust - avg / tot;
   g.politics.baseTrust += shift; // move the base so total matches the template
   updateApproval(g, true);
+  for (var i = 0; i < g.cohorts.length; i++) g.cohorts[i].fit0 = constFit(g, g.cohorts[i]);
 }
 
 function ageShare(g, a) { return a == 0 ? g.pop.young : (a == 2 ? g.pop.old : 1 - g.pop.old - g.pop.young); }
@@ -776,6 +901,9 @@ function updateApproval(g, instant) {
     F["Specific policies"] = policyCohortEffect(g, c);
     F["Events and scandals"] = g.politics.mood;
     F["Time in office"] = -0.02 * yearsInOffice;
+    if (c.fit0 === undefined) c.fit0 = constFit(g, c);
+    F["Constitution and rights"] = constFit(g, c) - c.fit0;
+    F["War and peace"] = warMood(g);
     var S = g.politics.baseTrust;
     for (var k in F) S += F[k];
     S = clamp(S, 0.04, 0.96);
@@ -814,6 +942,23 @@ function policyCohortEffect(g, c) {
   x -= (g.taxes.vat - g.taxes0.vat) * 0.004;
   if (c.q == 4) x -= (g.taxes.incomeTop - g.taxes0.incomeTop) * 0.003;
   if (c.q >= 2) x -= (g.taxes.incomeBasic - g.taxes0.incomeBasic) * 0.003;
+  // added in 0.2
+  var Y = g.econ.gdp, soc = idealSocial(g, c), v;
+  if ((v = pv(g, "ubi"))) x += c.q <= 1 ? v / Y * 1.2 : (c.q == 4 ? -v / Y * 0.8 : 0);
+  if ((v = pv(g, "childbenefit"))) x += c.age == 1 ? v / Y * 0.8 : 0;
+  if ((v = pv(g, "wealthtax"))) x += c.q == 4 ? -0.012 * v : (c.q <= 2 ? 0.003 * v : 0);
+  if ((v = pv(g, "sugartax"))) x -= c.q <= 1 ? 0.0006 * v : 0.0002 * v;
+  if ((v = pv(g, "tuition"))) x += c.age == 1 ? v / Y * 1.0 : 0;
+  var ra = pv(g, "retireage") - g.policies0.retireage.value;
+  if (ra) x -= c.age == 2 ? 0.015 * ra : (c.age == 1 && c.q <= 2 ? 0.004 * ra : 0);
+  if ((v = pv(g, "surveillance"))) x += soc >= 50 ? -0.0008 * v : 0.0003 * v;
+  if ((v = pv(g, "drugs"))) x += soc < 45 ? -0.015 * v : 0.006 * v;
+  var gc = pv(g, "guncontrol") - g.policies0.guncontrol.value;
+  if (gc) x += g.regions[c.region].income < 1 ? -0.0005 * gc : 0.0002 * gc;
+  if (pv(g, "landreform")) x += c.q <= 1 ? 0.02 : (c.q == 4 ? -0.02 : 0);
+  if ((v = pv(g, "housingbuild"))) x += c.q <= 2 && c.age == 1 ? v / Y * 1.5 : 0;
+  if ((v = pv(g, "greenenergy"))) x += c.age == 1 && c.q >= 2 ? v / Y * 0.6 : 0;
+  if ((v = pv(g, "anticorruption"))) x += v / Y * 3;
   return x;
 }
 
@@ -822,6 +967,7 @@ function partyShares(g, c) {
   var utils = [], mx = -1e9;
   for (var i = 0; i < g.parties.length; i++) {
     var p = g.parties[i];
+    if (p.banned) { utils.push(-1e9); continue; }
     var uu = -Math.abs(p.econ - idealEcon(g, c)) / 10 - Math.abs(p.social - idealSocial(g, c)) / 15 + p.bias;
     uu += p.inGov ? 6 * (c.approval - 0.45) : -2 * (c.approval - 0.45);
     utils.push(uu); if (uu > mx) mx = uu;
@@ -838,9 +984,12 @@ function nationalShares(g, regionIndex) {
   var shares = g.parties.map(function () { return 0; }), tot = 0;
   for (var i = 0; i < g.cohorts.length; i++) {
     var c = g.cohorts[i];
-    if (c.age == 0) continue;
+    var va = g.constitution.votingAge;
+    if (c.age == 0 && va > 16) continue;
     if (regionIndex !== undefined && c.region != regionIndex) continue;
     var w = cohortPop(g, c) * turnout(c);
+    if (c.age == 0) w = cohortPop(g, c) * 0.11 * 0.45; // 16 and 17 year olds
+    if (c.age == 1 && va > 18) w *= 1 - (va - 18) * 0.025;
     var s = partyShares(g, c);
     for (var j = 0; j < s.length; j++) shares[j] += s[j] * w;
     tot += w;
@@ -868,7 +1017,7 @@ function updatePolls(g) {
 
 function politicsWeekly(g) {
   // mood fades back to normal
-  g.politics.mood *= 0.95;
+  g.politics.mood *= g.constitution.press == "state" ? 0.9 : 0.95; // state media buries bad news faster
   // coalition partners get fed up if their poll drops or patience is low
   var gp = govParties(g);
   for (var i = 0; i < gp.length; i++) {
@@ -888,7 +1037,7 @@ function politicsWeekly(g) {
     }
   }
   // confidence vote if the government lost its majority
-  if (g.constitution.confidenceRule && govSeats(g) < g.constitution.majority && !g.politics.snapElection) {
+  if (g.constitution.confidenceRule && g.constitution.legislature == "elected" && !decreeMode(g) && electionsHeld(g) && govSeats(g) < g.constitution.majority && !g.politics.snapElection) {
     var opp = g.constitution.seats - govSeats(g);
     // opposition only brings it down if they're united-ish and the government is unpopular
     var against = Math.round(opp * clamp(0.75 + (0.4 - g.politics.approval), 0.5, 1));
@@ -907,7 +1056,9 @@ function politicsWeekly(g) {
     }
   }
   // elections
+  if (!electionsHeld(g)) return;
   var due = g.politics.snapElection ? g.politics.snapElection : g.politics.nextElection;
+  if (!due) return;
   if (g.week >= due) holdElection(g);
   else if (due - g.week == 4) addEvent(g, "campaign", 2, "Election campaign begins - polling day is " + weekDate(g, due), { date: weekDate(g, due) }, "Scheduled under the constitution.", 0);
 }
@@ -929,86 +1080,124 @@ function dhondt(votes, seats, threshold) {
 }
 
 function holdElection(g) {
-  var sys = g.constitution.electionSystem;
-  var seats = g.parties.map(function () { return 0; });
-  var regionResults = [];
-  var nat = nationalShares(g);
+  var c = g.constitution;
+  var sys = c.electionSystem;
+  var me = playerParty(g), myIdx = g.parties.indexOf(me);
+  var accountable = c.executive == "pm" || c.executive == "president";
+
+  // term limits: you have to step down
+  if (c.termLimit > 0 && accountable && g.politics.termsServed >= c.termLimit) {
+    addEvent(g, "termLimit", 3, g.leaderName + " steps down after reaching the term limit", { terms: g.politics.termsServed, limit: c.termLimit },
+      "The constitution allows " + c.termLimit + " term(s). Amend it to stay longer.", 0, true);
+    if (g.difficulty != "sandbox") {
+      g.gameOver = { week: g.week, retired: true, reason: "You served the maximum " + c.termLimit + " term(s) allowed by the constitution and retired. Approval when you left: " + pct(g.politics.approval, 0) + "." };
+      return;
+    }
+    g.politics.termsServed = 0;
+  }
+
+  // "restricted" elections are tilted toward the government
+  function tilt(sh) {
+    if (c.partySystem == "single") return g.parties.map(function (p, i) { return i == myIdx ? 1 : 0; });
+    if (c.elections != "restricted") return sh;
+    var o = sh.slice(); o[myIdx] *= 1.8;
+    var t = sum(o); return o.map(function (x) { return x / t; });
+  }
+  var real = nationalShares(g);
+  var nat = tilt(real);
   var turnoutTot = 0, adultsTot = 0;
   for (var i = 0; i < g.cohorts.length; i++) if (g.cohorts[i].age > 0) { var w = cohortPop(g, g.cohorts[i]); turnoutTot += w * turnout(g.cohorts[i]); adultsTot += w; }
-  if (sys == "national") {
-    seats = dhondt(nat, g.constitution.seats, 0.05);
-  }
-  for (var r = 0; r < g.regions.length; r++) {
-    var sh = nationalShares(g, r);
-    var rs = g.parties.map(function () { return 0; });
-    if (sys == "dhondt") {
-      rs = dhondt(sh, g.regions[r].seats, 0);
-    } else if (sys == "fptp") {
-      for (var d = 0; d < g.regions[r].seats; d++) {
-        var best = -1, bi = 0;
-        for (var i = 0; i < sh.length; i++) {
-          var local = sh[i] * Math.exp((rand(g) - 0.5) * 0.6);
-          if (local > best) { best = local; bi = i; }
-        }
-        rs[bi]++;
-      }
-    }
-    if (sys != "national") for (var i = 0; i < seats.length; i++) seats[i] += rs[i];
-    regionResults.push({ region: g.regions[r].name, shares: sh, seats: sys == "national" ? null : rs });
-  }
+  var seats = g.parties.map(function (p) { return p.seats; });
+  var regionResults = [];
   var old = g.parties.map(function (p) { return p.seats; });
-  for (var i = 0; i < g.parties.length; i++) g.parties[i].seats = seats[i];
+
+  if (c.legislature == "elected") {
+    seats = g.parties.map(function () { return 0; });
+    var districts = g.regions.map(function (r) { return sys == "mixed" ? Math.floor(r.seats / 2) : r.seats; });
+    if (sys == "national") seats = dhondt(nat, c.seats, 0.05);
+    if (sys == "mixed") seats = dhondt(nat, c.seats - sum(districts), 0.05);
+    for (var r = 0; r < g.regions.length; r++) {
+      var sh = tilt(nationalShares(g, r));
+      var rs = g.parties.map(function () { return 0; });
+      if (sys == "dhondt") rs = dhondt(sh, g.regions[r].seats, 0);
+      else if (sys == "fptp" || sys == "mixed") {
+        for (var d = 0; d < districts[r]; d++) {
+          var best = -1, bi = 0;
+          for (var i = 0; i < sh.length; i++) {
+            var local = sh[i] * Math.exp((rand(g) - 0.5) * 0.6);
+            if (local > best) { best = local; bi = i; }
+          }
+          rs[bi]++;
+        }
+      }
+      if (sys != "national") for (var i = 0; i < seats.length; i++) seats[i] += rs[i];
+      regionResults.push({ region: g.regions[r].name, shares: sh, seats: sys == "national" ? null : rs });
+    }
+    for (var i = 0; i < g.parties.length; i++) g.parties[i].seats = seats[i];
+  }
 
   // explanation: biggest approval factors
   var fac = g.politics.factors, drivers = [];
   for (var k in fac) drivers.push([k, fac[k]]);
   drivers.sort(function (a, b) { return Math.abs(b[1]) - Math.abs(a[1]); });
 
-  var result = { week: g.week, date: weekDate(g), system: sys, turnout: turnoutTot / adultsTot, shares: nat, seats: seats, oldSeats: old,
-    parties: g.parties.map(function (p) { return p.name; }), regions: regionResults, drivers: drivers.slice(0, 5), approval: g.politics.approval };
+  var result = { week: g.week, date: weekDate(g), system: c.legislature == "elected" ? sys : "presidential only", turnout: turnoutTot / adultsTot, shares: nat, seats: seats, oldSeats: old,
+    parties: g.parties.map(function (p) { return p.name; }), regions: regionResults, drivers: drivers.slice(0, 5), approval: g.politics.approval, kind: c.elections };
 
   // ---- who governs now? ----
-  var me = playerParty(g);
   var stayed = false, text = "";
-  if (g.template == "B") {
+  if (c.executive == "president") {
     // presidential run-off: our candidate vs biggest other party
     var oppIdx = -1, best = -1;
-    for (var i = 0; i < g.parties.length; i++) if (!g.parties[i].player && nat[i] > best) { best = nat[i]; oppIdx = i; }
-    var myIdx = g.parties.indexOf(me);
-    var mine = nat[myIdx] + 0.25 * (g.politics.approval - 0.45);
-    var runoff = clamp(mine / (mine + nat[oppIdx]), 0.05, 0.95);
-    result.runoff = { player: runoff, opponent: g.parties[oppIdx].name };
-    stayed = runoff > 0.5;
-    text = stayed ? "President " + g.leaderName + " re-elected with " + pct(runoff, 1) + " in the run-off" : g.parties[oppIdx].name + " candidate wins the presidency with " + pct(1 - runoff, 1);
-    if (stayed) {
-      // allies: parties close to us join the congress bloc
-      for (var i = 0; i < g.parties.length; i++) g.parties[i].inGov = g.parties[i].player || Math.abs(g.parties[i].econ - me.econ) < 10;
+    for (var i = 0; i < g.parties.length; i++) if (!g.parties[i].player && !g.parties[i].banned && real[i] > best) { best = real[i]; oppIdx = i; }
+    var runoff = 0.97;
+    if (oppIdx >= 0 && c.partySystem != "single") {
+      var mine = real[myIdx] + 0.25 * (g.politics.approval - 0.45);
+      runoff = clamp(mine / (mine + real[oppIdx]), 0.05, 0.95);
+      if (c.elections == "restricted") runoff = clamp(runoff + 0.15, 0.05, 0.97);
     }
-  } else {
+    result.runoff = { player: runoff, opponent: oppIdx >= 0 ? g.parties[oppIdx].name : "(no opponent)" };
+    stayed = runoff > 0.5;
+    text = stayed ? c.title + " " + g.leaderName + " re-elected with " + pct(runoff, 1) : g.parties[oppIdx].name + " candidate wins the presidency with " + pct(1 - runoff, 1);
+    if (stayed) for (var i = 0; i < g.parties.length; i++) g.parties[i].inGov = g.parties[i].player || (!g.parties[i].banned && Math.abs(g.parties[i].econ - me.econ) < 10);
+  } else if (c.executive == "pm" && c.partySystem != "single" && c.legislature == "elected") {
     var coalition = formCoalition(g);
     stayed = coalition.indexOf(me) >= 0 && coalition[0] == me;
     for (var i = 0; i < g.parties.length; i++) g.parties[i].inGov = coalition.indexOf(g.parties[i]) >= 0;
     var names = coalition.map(function (p) { return p.name; }).join(", ");
     text = stayed ? g.leaderName + " stays in office leading " + names : "Government changes: " + coalition[0].name + " will lead (" + names + ")";
     result.coalition = names;
+  } else {
+    // monarchs, party leaders, juntas (and single-party states) don't lose office at elections
+    stayed = true;
+    var top = 0; for (var i = 1; i < seats.length; i++) if (seats[i] > seats[top]) top = i;
+    text = c.partySystem == "single" ? "Single-list election: " + me.name + " wins every seat" : "Legislative election: " + g.parties[top].name + " wins most seats (" + seats[top] + ")";
+    for (var i = 0; i < g.parties.length; i++) g.parties[i].inGov = g.parties[i].player || (!g.parties[i].banned && Math.abs(g.parties[i].econ - me.econ) < 10);
+  }
+  if (c.elections == "restricted") {
+    g.politics.legitimacy = clamp(g.politics.legitimacy - 3, 0, 100);
+    for (var i = 0; i < g.foreign.length; i++) if (g.foreign[i].democratic) g.foreign[i].relation = clamp(g.foreign[i].relation - 4, 0, 100);
+    text += " (observers say the vote was not fair)";
   }
   result.stayed = stayed;
   result.text = text;
   g.politics.elections.push(result);
-  addEvent(g, "election", 3, text, { turnout: pct(result.turnout, 1), govSeats: govSeats(g), majority: g.constitution.majority, top: result.drivers[0] ? result.drivers[0][0] : "" },
+  addEvent(g, "election", 3, text, { turnout: pct(result.turnout, 1), govSeats: govSeats(g), majority: c.majority, top: result.drivers[0] ? result.drivers[0][0] : "" },
     "General election held on " + result.date + ". Main driver: " + (result.drivers[0] ? result.drivers[0][0] : "none") + ".", stayed ? 1 : -1, true);
 
   if (!stayed && g.difficulty != "sandbox") {
     g.gameOver = { week: g.week, reason: "You lost the election. " + text };
   }
   // new term
+  if (stayed && accountable) g.politics.termsServed++;
   g.politics.termStart = g.week;
-  g.politics.nextElection = g.week + 52 * g.constitution.termYears;
+  g.politics.nextElection = g.week + 52 * c.termYears;
   g.politics.snapElection = 0;
   g.politics.minorityNoted = false;
   g.politics.record0 = g.politics.record;
   for (var i = 0; i < g.parties.length; i++) g.parties[i].patience = 70;
   if (stayed) makeCabinet(g);
+  if (c.chambers == 2) computeUpper(g);
   setRefs(g);
 }
 
@@ -1036,36 +1225,76 @@ function billLean(g, changes) {
     if (c.kind == "tax") lean += (c.to - c.from) > 0 ? -0.3 : 0.3;
     if (c.kind == "spend") lean += (c.to - c.from) > 0 ? -0.25 : 0.25;
     if (c.kind == "policy") {
-      var L = { minwage: -0.6, rentcap: -0.7, energysub: -0.3, hospstaff: -0.4, infra: -0.3, pensionidx: -0.2, nationalise: -1, privatise: 1, conscription: 0.4, immigration: 0.3, freeschool: -0.5, emissions: -0.5 }[c.id] || 0;
+      var def = policyInfo(c.id);
+      var L = def && def.lean ? def.lean : 0;
+      if (c.to < c.from) L = -L; // making less of a policy leans the other way
       if (c.id == "pensionidx" && c.to < 0) L = 0.5;
       lean += L;
     }
+    if (c.kind == "amend" && c.id == "economy") lean += c.to == "planned" ? -1 : (c.to == "market" ? 0.6 : 0);
   }
   return clamp(lean, -1, 1);
 }
 
-function predictVote(g, bill) {
-  var res = { yes: 0, no: 0, abstain: 0, parties: [] };
+// the social / freedom side of a bill: + means more liberal, - means more authoritarian or nationalist
+function billSocialLean(g, changes) {
+  var s = 0;
+  var amends = changes.filter(function (c) { return c.kind == "amend"; });
+  if (amends.length) {
+    var g2 = { constitution: copy(g.constitution), policies: g.policies };
+    var before = democracyIndex(g2);
+    for (var i = 0; i < amends.length; i++) g2.constitution[amends[i].id] = amends[i].to;
+    normalizeConstitution(g2.constitution, g.regions.length);
+    s += clamp((democracyIndex(g2) - before) / 25, -1, 1);
+  }
+  for (var i = 0; i < changes.length; i++) {
+    var c = changes[i], dir = c.to > c.from ? 1 : -1;
+    if (c.kind == "policy") s += dir * ({ surveillance: -0.6, drugs: 0.5, guncontrol: 0.2, immigration: 0.3, conscription: -0.4 }[c.id] || 0);
+    if (c.kind == "war") s -= 0.6;
+  }
+  return clamp(s, -1, 1);
+}
+
+function policyInfo(id) { for (var i = 0; i < POLICIES.length; i++) if (POLICIES[i].id == id) return POLICIES[i]; }
+
+function voteChamber(g, bill, seatsArr, size) {
+  var res = { yes: 0, no: 0, abstain: 0, parties: [], size: size };
   for (var i = 0; i < g.parties.length; i++) {
-    var p = g.parties[i];
-    var align = -bill.lean * (50 - p.econ) / 50; // >0 means the party agrees
+    var p = g.parties[i], seats = seatsArr[i] || 0;
+    if (!seats) continue;
+    var align = -bill.lean * (50 - p.econ) / 50 + bill.socialLean * (p.social - 50) / 50; // >0 means the party agrees
     var y = 0;
     if (bill.type == "amend") align -= 0.2;
     if (p.inGov) {
       var rebels = clamp(-align * 0.5, 0, 0.4);
       if (!p.player && p.patience < 20 && align < 0) rebels = 1;
-      y = Math.round(p.seats * (1 - rebels));
+      y = Math.round(seats * (1 - rebels));
     } else {
-      if (align > 0.2) y = Math.round(p.seats * Math.min(1, align * 1.5));
-      if (bill.type == "amend" && align > 0.05) y = Math.round(p.seats * 0.5);
+      if (align > 0.2) y = Math.round(seats * Math.min(1, align * 1.5));
+      if (bill.type == "amend" && align > 0.05) y = Math.round(seats * 0.5);
     }
-    var ab = Math.round((p.seats - y) * (p.inGov ? 0.5 : 0.15));
-    var n = p.seats - y - ab;
+    var ab = Math.round((seats - y) * (p.inGov ? 0.5 : 0.15));
+    var n = seats - y - ab;
     res.yes += y; res.no += n; res.abstain += ab;
     res.parties.push({ name: p.name, yes: y, no: n, abstain: ab });
   }
-  res.needed = bill.type == "amend" ? g.constitution.supermajority : res.yes + res.no > 0 ? Math.floor((res.yes + res.no) / 2) + 1 : 1;
-  res.passes = bill.type == "amend" ? res.yes >= g.constitution.supermajority : res.yes > res.no;
+  res.needed = bill.type == "amend" ? Math.ceil(size * g.constitution.amendThreshold) : Math.floor((res.yes + res.no) / 2) + 1;
+  res.passes = bill.type == "amend" ? res.yes >= res.needed : res.yes > res.no;
+  return res;
+}
+
+function predictVote(g, bill) {
+  var c = g.constitution;
+  if (bill.socialLean === undefined) bill.socialLean = billSocialLean(g, bill.changes);
+  if (decreeMode(g)) {
+    var total = sum(g.parties.map(function (p) { return p.seats; }));
+    return { yes: total, no: 0, abstain: 0, parties: [], needed: 0, passes: true, decree: true };
+  }
+  var res = voteChamber(g, bill, g.parties.map(function (p) { return p.seats; }), c.seats);
+  if (c.chambers == 2 && g.upper && c.upperHouse != "appointed") {
+    res.upper = voteChamber(g, bill, g.upper.seats, g.upper.total);
+    res.passes = res.passes && res.upper.passes;
+  }
   return res;
 }
 
@@ -1085,13 +1314,23 @@ function costBill(g, changes) {
 function validateBill(g, bill) {
   var checks = [];
   // LEGAL
-  var legal = { name: "LEGAL", ok: true, msg: "The legislature has authority. Procedure: " + (bill.type == "amend" ? "constitutional amendment (" + g.constitution.amendmentText + ")" : "ordinary bill, simple majority") + "." };
+  var con = g.constitution;
+  var proc = decreeMode(g) ? "enacted by decree, no vote needed" : (con.chambers == 2 && con.upperHouse != "appointed" ? "majority in both chambers" : "simple majority in the legislature");
+  var legal = { name: "LEGAL", ok: true, msg: "The government has authority. Procedure: " + (bill.type == "amend" ? "constitutional amendment (" + con.amendmentText + ")" : proc) + "." };
   if (g.gameOver) { legal.ok = false; legal.msg = "The government is no longer in office."; }
   for (var i = 0; i < bill.changes.length; i++) {
     var c = bill.changes[i];
     if (c.kind == "policy" && c.id == "privatise" && !g.flags.railPrivate && g.policies.nationalise.active && false) legal.ok = false;
     if (c.kind == "policy" && c.id == "nationalise" && g.flags.energyPublic && c.to > 0) { legal.ok = false; legal.msg = "Energy utilities are already in public ownership."; }
     if (c.kind == "policy" && c.id == "privatise" && g.flags.railPrivate && c.to > 0) { legal.ok = false; legal.msg = "Rail is already privatised."; }
+    if (c.kind == "policy" && c.id == "surveillance" && c.to > 40 && con.judiciary == "independent") { legal.ok = false; legal.msg = "The independent courts would strike this down as a breach of privacy rights (limit is 40). Change the courts in the constitution first."; }
+    if (c.kind == "war") {
+      var en = countryOf(g, c.id);
+      if (g.war) { legal.ok = false; legal.msg = "We are already at war."; }
+      else if (en.treaties.indexOf("nonaggression") >= 0 || en.treaties.indexOf("defence") >= 0) { legal.ok = false; legal.msg = "We have a treaty with " + en.name + " that forbids this."; }
+      else legal.msg += " A declaration of war on " + en.name + " (military strength " + en.military + " vs ours " + Math.round(ourStrength(g)) + ").";
+    }
+    if (c.kind == "amend" && c.id == "seats" && (c.to < 30 || c.to > 650)) { legal.ok = false; legal.msg = "The legislature must have 30 to 650 seats."; }
   }
   checks.push(legal);
   // FISCAL
@@ -1120,20 +1359,26 @@ function validateBill(g, bill) {
   var econ = { name: "ECONOMIC", ok: true, msg: "All values are inside the model's supported ranges." };
   for (var i = 0; i < bill.changes.length; i++) {
     var c = bill.changes[i];
-    if (isNaN(c.to)) { econ.ok = false; econ.msg = c.name + " is not a number."; }
+    if ((c.kind == "tax" || c.kind == "spend" || c.kind == "policy") && isNaN(c.to)) { econ.ok = false; econ.msg = c.name + " is not a number."; }
     else if (c.min !== undefined && (c.to < c.min || c.to > c.max)) { econ.ok = false; econ.msg = c.name + " must be between " + c.min + " and " + c.max + "."; }
   }
   checks.push(econ);
   // POLITICAL
   var v = predictVote(g, bill);
   bill.prediction = v;
-  var pol = { name: "POLITICAL", ok: true, msg: "Expected vote: " + v.yes + " for, " + v.no + " against, " + v.abstain + " abstain. " + (bill.type == "amend" ? "Needs " + g.constitution.supermajority + " of " + g.constitution.seats + " votes." : "Needs more votes for than against.") };
-  if (!v.passes) { pol.warn = true; pol.msg += " LIKELY TO FAIL. Government parties have " + govSeats(g) + " seats."; }
+  var pol;
+  if (v.decree) pol = { name: "POLITICAL", ok: true, msg: "No vote needed - the " + con.title + " decides. Expect the public to react to the policy itself." };
+  else {
+    pol = { name: "POLITICAL", ok: true, msg: "Expected vote: " + v.yes + " for, " + v.no + " against, " + v.abstain + " abstain. " + (bill.type == "amend" ? "Needs " + v.needed + " of " + con.seats + " votes." : "Needs more votes for than against.") };
+    if (v.upper) pol.msg += " Upper chamber: " + v.upper.yes + " for, " + v.upper.no + " against" + (v.upper.passes ? "." : " (FAILS there).");
+    if (!v.passes) { pol.warn = true; pol.msg += " LIKELY TO FAIL. Government parties have " + govSeats(g) + " seats." + (con.legPower == "advisory" ? " The legislature is only advisory, so you could override it by decree (costs legitimacy)." : ""); }
+  }
   checks.push(pol);
   return checks;
 }
 
 function applyChanges(g, changes, preview) {
+  var oldCon = copy(g.constitution), amended = false;
   for (var i = 0; i < changes.length; i++) {
     var c = changes[i];
     if (c.kind == "tax") {
@@ -1145,8 +1390,9 @@ function applyChanges(g, changes, preview) {
     if (c.kind == "policy") {
       var p = g.policies[c.id];
       p.value = c.to; p.since = g.week;
-      p.active = c.to != 0 || c.id == "minwage" || c.id == "immigration";
-      if (c.id == "rentcap") p.active = true;
+      var info = policyInfo(c.id);
+      p.active = c.to != 0 || !!(info && info.alwaysOn);
+      if (c.id == "landreform" && c.to > c.from) g.debtAdjust = (g.debtAdjust || 0) + (c.to - c.from);
       // energy subsidy cuts bills once (a one-off fall in the price level), it doesnt keep cutting inflation forever
       if (c.id == "energysub" && !preview) g.econ.priceShock -= (c.to - c.from) / g.flows.C;
       if (c.id == "pensionidx") { g.budget.lines.pensions *= 1 + c.to / 100; p.active = false; }
@@ -1154,19 +1400,25 @@ function applyChanges(g, changes, preview) {
       if (c.id == "privatise" && c.to > 0) { g.debtAdjust = (g.debtAdjust || 0) - c.to; g.flags.railPrivate = true; g.budget.lines.transport *= 0.85; }
       if (c.id == "nationalise" || c.id == "privatise") p.active = c.to > 0;
     }
-    if (c.kind == "amend") {
-      if (c.id == "termYears") { g.constitution.termYears = c.to; g.politics.nextElection = g.politics.termStart + 52 * c.to; }
-      if (c.id == "fiscalRule") g.constitution.fiscalRule = c.to;
-      if (c.id == "electionSystem") g.constitution.electionSystem = c.to;
-      if (c.id == "cbIndependent") g.constitution.centralBankIndependent = !!c.to;
+    if (c.kind == "amend") { g.constitution[c.id] = c.to; amended = true; }
+    if (c.kind == "identity") {
+      if (c.id == "leaderTitle") { g.constitution.leaderTitle = c.to; amended = true; }
+      else if (c.id == "flagImg") g.country.flagImg = cleanFlagImg(c.to);
+      else if (c.id == "flag") g.country.flag = cleanFlag(c.to) || g.country.flag;
+      else g.country[c.id] = String(c.to).slice(0, 60);
     }
+    if (c.kind == "war" && !preview) startWar(g, c.id, true);
+  }
+  if (amended) {
+    if (preview) normalizeConstitution(g.constitution, g.regions.length);
+    else constitutionTransition(g, oldCon);
   }
 }
 
 // player submits a bill (command)
 function submitBill(g, title, type, changes, ministry) {
   g.billCounter++;
-  var bill = { id: "B-" + g.billCounter, title: title, type: type, ministry: ministry || "finance", changes: changes, lean: billLean(g, changes),
+  var bill = { id: "B-" + g.billCounter, title: title, type: type, ministry: ministry || "finance", changes: changes, lean: billLean(g, changes), socialLean: billSocialLean(g, changes),
     stage: "DRAFT", log: [], votes: [], amendments: [], submitted: g.week, effective: null };
   var checks = validateBill(g, bill);
   bill.checks = checks;
@@ -1187,8 +1439,9 @@ function amendBill(g, billId, changes) {
   var old = bill.changes;
   bill.changes = changes;
   bill.lean = billLean(g, changes);
+  bill.socialLean = billSocialLean(g, changes);
   var checks = validateBill(g, bill);
-  for (var i = 0; i < checks.length; i++) if (!checks[i].ok) { bill.changes = old; bill.lean = billLean(g, old); return { ok: false, checks: checks }; }
+  for (var i = 0; i < checks.length; i++) if (!checks[i].ok) { bill.changes = old; bill.lean = billLean(g, old); bill.socialLean = billSocialLean(g, old); return { ok: false, checks: checks }; }
   bill.amendments.push({ week: g.week, from: old, to: changes });
   bill.log.push({ week: g.week, stage: "AMENDMENT WINDOW", note: "Amended by the government. " + checks[1].msg });
   g.commandLog.push({ week: g.week, cmd: "amendBill", bill: bill.id });
@@ -1204,18 +1457,37 @@ function withdrawBill(g, billId) {
 }
 
 function findBill(g, id) { for (var i = 0; i < g.bills.length; i++) if (g.bills[i].id == id) return g.bills[i]; }
-function ministryName(id) { for (var i = 0; i < MINISTRIES.length; i++) if (MINISTRIES[i].id == id) return MINISTRIES[i].name; return id; }
+function ministryName(id) {
+  // renamed ministries (the game object is a global in the browser, in tests it might not exist)
+  if (typeof game !== "undefined" && game && game.ministryNames && game.ministryNames[id]) return game.ministryNames[id];
+  if (currentGame && currentGame.ministryNames && currentGame.ministryNames[id]) return currentGame.ministryNames[id];
+  for (var i = 0; i < MINISTRIES.length; i++) if (MINISTRIES[i].id == id) return MINISTRIES[i].name;
+  return id;
+}
+var currentGame = null; // set by advanceWeek so ministry names work in node too
 
 function processBills(g) {
   for (var i = 0; i < g.bills.length; i++) {
     var b = g.bills[i];
     if (b.submitted >= g.week) continue;
+    // decrees skip the votes
+    var byDecree = b.stage == "COMMITTEE" && (b.type == "amend" ? amendRouteFor(g.constitution) == "decree" : decreeMode(g));
+    if (byDecree) {
+      b.log.push({ week: g.week, stage: "EXECUTIVE ASSENT", note: g.constitution.partySystem == "single" && g.constitution.legislature == "elected" ? "Approved unanimously by the assembly." : "Signed as a decree by the " + g.constitution.title + "." });
+      b.stage = "EXECUTIVE ASSENT";
+      b.decree = true;
+      b.effective = g.week + 1;
+      g.politics.record = clamp(g.politics.record + b.lean * 4, 0, 100);
+      addEvent(g, "billPass", 2, "Decree: " + b.title, { bill: b.id, effective: weekDate(g, b.effective) }, "Issued by the " + g.constitution.title + " without a vote.", 0, false, b.id);
+      continue;
+    }
     if (b.stage == "COMMITTEE") {
       var v = predictVote(g, b);
       b.votes.push({ week: g.week, stage: "FIRST VOTE", yes: v.yes, no: v.no, abstain: v.abstain, parties: v.parties });
       if (!v.passes) {
         b.stage = "REJECTED";
-        b.log.push({ week: g.week, stage: "FIRST VOTE", note: "Defeated " + v.yes + " to " + v.no + "." });
+        b.canOverride = g.constitution.legPower == "advisory" && b.type != "amend";
+        b.log.push({ week: g.week, stage: "FIRST VOTE", note: "Defeated " + v.yes + " to " + v.no + "." + (v.upper && !v.upper.passes ? " (Blocked in the upper chamber.)" : "") });
         addEvent(g, "billFail", 2, "Parliament rejects " + b.title, { yes: v.yes, no: v.no, bill: b.id }, "Not enough members voted for it.", -1, true);
         g.politics.mood -= 0.01;
       } else {
@@ -1227,6 +1499,7 @@ function processBills(g) {
       b.votes.push({ week: g.week, stage: "FINAL VOTE", yes: v.yes, no: v.no, abstain: v.abstain, parties: v.parties });
       if (!v.passes) {
         b.stage = "REJECTED";
+        b.canOverride = g.constitution.legPower == "advisory" && b.type != "amend";
         b.log.push({ week: g.week, stage: "FINAL VOTE", note: "Defeated " + v.yes + " to " + v.no + "." });
         addEvent(g, "billFail", 2, "Parliament rejects " + b.title + " at final vote", { yes: v.yes, no: v.no, bill: b.id }, "Not enough members voted for it.", -1, true);
         continue;
@@ -1243,6 +1516,21 @@ function processBills(g) {
         }
         addEvent(g, "referendum", 3, "Referendum approves constitutional change", { yes: pct(yes, 1), bill: b.id }, "The referendum result was above 50%.", 1, true);
       }
+      if (b.type == "amend" && g.constitution.territory == "federal") {
+        // regional governments have to agree too
+        var agree = 0;
+        for (var r = 0; r < g.regions.length; r++) {
+          var a = 0, w = 0;
+          for (var j = 0; j < g.cohorts.length; j++) { var co = g.cohorts[j]; if (co.region == r && co.age > 0) { a += co.approval * cohortPop(g, co); w += cohortPop(g, co); } }
+          if (a / w > 0.38 || b.socialLean > 0.1) agree++;
+        }
+        b.log.push({ week: g.week, stage: "REGIONS", note: agree + " of " + g.regions.length + " regional governments agree." });
+        if (agree * 2 <= g.regions.length) {
+          b.stage = "REJECTED";
+          addEvent(g, "billFail", 3, "Regional governments block constitutional change", { agree: agree, regions: g.regions.length, bill: b.id }, "A majority of regions must agree under the federal constitution.", -1, true);
+          continue;
+        }
+      }
       b.log.push({ week: g.week, stage: "FINAL VOTE", note: "Passed " + v.yes + " to " + v.no + "." });
       b.log.push({ week: g.week, stage: "EXECUTIVE ASSENT", note: "Signed into law." });
       b.stage = "EXECUTIVE ASSENT";
@@ -1250,7 +1538,7 @@ function processBills(g) {
       // coalition partners who disagreed get annoyed
       for (var j = 0; j < g.parties.length; j++) {
         var p = g.parties[j];
-        if (p.inGov && !p.player) { var al = -b.lean * (50 - p.econ) / 50; if (al < -0.15) p.patience -= 15 * Math.abs(al); }
+        if (p.inGov && !p.player) { var al = -b.lean * (50 - p.econ) / 50 + (b.socialLean || 0) * (p.social - 50) / 50; if (al < -0.15) p.patience -= 15 * Math.abs(al); }
       }
       // what the government stands for moves with what it passes
       g.politics.record = clamp(g.politics.record + b.lean * 4, 0, 100);
@@ -1344,12 +1632,14 @@ function foreignAI(g) {
   for (var i = 0; i < g.foreign.length; i++) {
     var f = g.foreign[i];
     // relations drift back toward their natural level
-    var base = FOREIGN[i].relation;
+    var base = f.baseRelation !== undefined ? f.baseRelation : FOREIGN[i].relation;
+    if (f.atWar) base = 0;
     f.relation += (base - f.relation) * 0.02 + (rand(g) - 0.5) * 2;
     if (f.sanctioned) f.relation -= 1;
     f.relation = clamp(f.relation, 0, 100);
     f.gdp *= 1 + (0.02 + (rand(g) - 0.5) * 0.02) / 13;
   }
+  maybeAttacked(g);
   // sometimes a foreign state makes an offer to us
   if (chance(g, 0.15)) {
     var f = pick(g, g.foreign);
@@ -1524,6 +1814,7 @@ function recordHistory(g) {
     approval: g.politics.approval, pop: totalPop(g), healthCap: hs.capacity, healthDemand: hs.demand, healthAccess: hs.access,
     healthStaff: hs.staff, wait: hs.wait, rate: e.policyRate, exch: e.exch, disp: dispAvg, gini: gini, poverty: poverty,
     readiness: g.defence.readiness, crime: g.crime, emissions: e.emissions,
+    di: g.politics.di, legitimacy: g.politics.legitimacy, unrest: g.politics.unrest, loyalty: g.defence.loyalty, corruption: g.politics.corruption,
     qdisp: f.q.map(function (q) { return q.disp / (A * 0.2); }),
     polls: g.parties.map(function (p) { return p.poll; }),
     why: {
@@ -1625,10 +1916,16 @@ function makeNews(g) {
       if (o.id == "flash" && ["scandal", "protest", "strike", "disaster", "border"].indexOf(ev.type) >= 0) p += 0.5;
       if (o.id == "regional" && ev.region !== null) p += 0.5;
       if (o.id == "nbs") p += 0.15;
+      var press = g.constitution.press;
+      if (press == "state" && o.id != "nbs") continue; // only the state broadcaster is left
+      if (press == "restricted" && o.id == "flash") continue; // the tabloid was closed down
+      if (press == "state" && ev.valence < 0 && randNews(g) < 0.7) continue; // bad news gets buried
       if (randNews(g) >= p) continue;
       // tone: does the outlet like the government?
       var friendly = 1 - Math.abs(o.lean - govEcon) / 40; // 1 = friendly, negative = hostile
       var tone = ev.valence + friendly * 0.6 + (randNews(g) - 0.5) * o.sensational;
+      if (press == "state") tone = Math.max(tone, 0.7) + 0.3;
+      if (press == "restricted") tone = Math.max(tone, -0.3);
       g.news.push(writeArticle(g, ev, o, tone));
     }
   }

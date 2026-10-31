@@ -54,9 +54,9 @@ function drawShell() {
     return;
   }
   var g = game;
-  $("flag").innerHTML = "<div style='background:" + g.country.flag[0] + "'></div><div style='background:" + g.country.flag[1] + "'></div><div style='background:" + g.country.flag[2] + "'></div>";
+  $("flag").innerHTML = flagHtml(g.country, 45, 30);
   $("countryname").innerHTML = esc(g.country.name);
-  $("subline").innerHTML = esc(g.constitution.govType) + " | " + esc(g.constitution.leaderTitle) + ": " + esc(g.leaderName) + " (" + esc(playerParty(g).name) + ")";
+  $("subline").innerHTML = (g.country.motto ? "<i>" + esc(g.country.motto) + "</i> | " : "") + esc(g.constitution.govType) + " | " + esc(g.constitution.title) + ": " + esc(g.leaderName) + " (" + esc(playerParty(g).name) + ")";
   $("datebox").innerHTML = "<b>Week " + g.week + "</b> - " + weekDate(g) + " (week " + weekOfYear(g) + " of " + weekYear(g) + ")";
   $("adv1").disabled = $("adv4").disabled = $("adv13").disabled = !!g.gameOver && g.difficulty != "sandbox";
   $("savestatus").innerHTML = lastSaved ? "Autosaved week " + lastSaved : "Not saved";
@@ -73,11 +73,17 @@ function drawShell() {
   s += "</table>";
   s += "<h4>GOVERNMENT</h4><table>";
   s += sideRow("Approval", pct(h.approval, 0), "chart/approval");
-  s += sideRow("Majority", govSeats(g) + " / " + g.constitution.majority + " needed", "parliament");
+  if (g.constitution.legislature != "none") s += sideRow("Majority", govSeats(g) + " / " + g.constitution.majority + " needed", "parliament");
+  s += sideRow("Legitimacy", Math.round(g.politics.legitimacy) + "/100", "chart/legitimacy");
+  s += sideRow("Unrest", Math.round(g.politics.unrest) + "/100", "chart/unrest");
+  s += sideRow("Army loyalty", Math.round(g.defence.loyalty) + "/100", "chart/loyalty");
+  s += sideRow("Democracy index", Math.round(g.politics.di) + "/100", "law");
   s += "</table>";
+  if (g.war) s += "<div class='alert'><a href='#defence'>AT WAR with " + esc(countryOf(g, g.war.enemy).name) + "</a><br>Front: " + Math.round(g.war.front) + "</div>";
   s += "<h4>DEADLINES</h4><table>";
   var due = g.politics.snapElection || g.politics.nextElection;
-  s += "<tr><td>Election</td><td>" + weekDate(g, due) + " (" + (due - g.week) + " wks)</td></tr>";
+  if (electionsHeld(g) && due) s += "<tr><td>Election</td><td>" + weekDate(g, due) + " (" + (due - g.week) + " wks)</td></tr>";
+  else s += "<tr><td>Election</td><td>none held</td></tr>";
   var pending = g.bills.filter(function (b) { return b.stage == "COMMITTEE" || b.stage == "AMENDMENT WINDOW" || b.stage == "EXECUTIVE ASSENT"; });
   for (var i = 0; i < pending.length; i++) s += "<tr><td colspan=2><a href='#bill/" + pending[i].id + "'>" + esc(pending[i].title) + "</a>: " + nextStage(pending[i]) + "</td></tr>";
   if (!pending.length) s += "<tr><td colspan=2 class='small'>No bills in parliament.</td></tr>";
@@ -107,7 +113,10 @@ function risksHtml(g) {
   var r = [];
   var h = g.history[g.history.length - 1];
   if (h.approval < 0.35) r.push("Government approval is low (" + pct(h.approval, 0) + ")");
-  if (govSeats(g) < g.constitution.majority) r.push("Government has no majority");
+  if (govSeats(g) < g.constitution.majority && !decreeMode(g) && g.constitution.legislature != "none") r.push("Government has no majority");
+  if (g.politics.unrest > 50) r.push("High unrest (" + Math.round(g.politics.unrest) + ")");
+  if (g.defence.loyalty < 45) r.push("Army loyalty low - coup risk");
+  if (g.politics.legitimacy < 30) r.push("Regime legitimacy low");
   if (h.infl > 0.05) r.push("Inflation above 5%");
   if (h.u > g.econ.natU + 0.02) r.push("Unemployment rising");
   if (-h.bal / h.gdp > 0.05) r.push("Deficit above 5% of GDP");
@@ -216,20 +225,6 @@ function replayCheck() {
   var same = JSON.stringify(res.game) == JSON.stringify(game);
   alert(same ? "Replay OK: re-running week " + before.week + " -> " + res.game.week + " from the saved state and seed gave exactly the same result."
     : "Replay gave a DIFFERENT result. (If you changed things after the turn, like submitting a bill or saving, that would explain it.)");
-}
-
-function startNewGame() {
-  var key = document.querySelector("input[name=tpl]:checked").value;
-  var opts = {
-    name: $("ng_name").value.trim(), capital: $("ng_capital").value.trim(), currency: $("ng_currency").value.trim(),
-    leaderName: $("ng_leader").value.trim(), partyName: $("ng_party").value.trim(),
-    difficulty: $("ng_diff").value, seed: $("ng_seed").value,
-    flag: [$("ng_f1").value, $("ng_f2").value, $("ng_f3").value]
-  };
-  for (var k in opts) if (opts[k] === "") delete opts[k];
-  game = newGame(key, opts);
-  autosave();
-  go("dashboard");
 }
 
 window.onhashchange = route;

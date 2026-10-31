@@ -144,3 +144,11 @@ canvas.chart { border: 1px solid #AAA; background: #fff; }
   #main { padding: 6px; }
   table.data { font-size: 11px; }
 }
+
+/* v0.2 */
+#flag { margin-right: 8px; }
+table.data th.grouphead, th.grouphead { background: #17345B; color: #fff; text-align: left; }
+.frontbar { display: flex; height: 22px; border: 1px solid #333; font-size: 11px; color: #fff; margin: 6px 0; }
+.frontus { background: #17345B; padding: 3px; overflow: hidden; white-space: nowrap; }
+.frontthem { background: #C8102E; padding: 3px; flex: 1; text-align: right; overflow: hidden; white-space: nowrap; }
+#ng_flagprev img, #ng_flagprev span { border: 1px solid #999 !important; }

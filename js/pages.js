@@ -8,7 +8,7 @@ var PAGE_TITLES = {
   services: "Public Services", elections: "Elections and Parties", regions: "Regions", foreign: "Foreign Affairs",
   defence: "Defence and Security", news: "Media and News", article: "Article", event: "Event Record", stats: "National Statistics",
   chart: "Indicator", why: "Why did this change?", archive: "Historical Archive", settings: "Settings and Save Games",
-  glossary: "Glossary", help: "How to play"
+  glossary: "Glossary", help: "How to play", identity: "National Identity"
 };
 
 var draft = null; // the bill being previewed
@@ -33,7 +33,12 @@ var INDICATORS = [
   { key: "poverty", name: "Poverty rate", fmt: function (v) { return pct(v); }, why: "disp" },
   { key: "gini", name: "Gini", fmt: function (v) { return (v * 100).toFixed(1); }, why: "disp" },
   { key: "readiness", name: "Readiness", fmt: function (v) { return v.toFixed(0) + "/100"; } },
-  { key: "crime", name: "Recorded crime", fmt: function (v) { return v.toFixed(1) + " per 1000"; } }
+  { key: "crime", name: "Recorded crime", fmt: function (v) { return v.toFixed(1) + " per 1000"; } },
+  { key: "di", name: "Democracy index", fmt: function (v) { return Math.round(v) + "/100"; } },
+  { key: "legitimacy", name: "Legitimacy", fmt: function (v) { return Math.round(v) + "/100"; } },
+  { key: "unrest", name: "Unrest", fmt: function (v) { return Math.round(v) + "/100"; } },
+  { key: "loyalty", name: "Army loyalty", fmt: function (v) { return Math.round(v) + "/100"; } },
+  { key: "corruption", name: "Corruption", fmt: function (v) { return Math.round(v) + "/100"; } }
 ];
 function indicator(key) { for (var i = 0; i < INDICATORS.length; i++) if (INDICATORS[i].key == key) return INDICATORS[i]; }
 
@@ -54,7 +59,7 @@ function diffFmt(ind) {
   if (ind.key == "approval") return function (d) { return (d * 100).toFixed(1) + " pts"; };
   return function (d) { return ind.fmt(d); };
 }
-var GOOD_UP = { gdp: 1, growth: 1, infl: 0, u: 0, debtRatio: 0, bal: 1, rev: 1, approval: 1, pop: 1, disp: 1, healthCap: 1, healthAccess: 1, wait: 0, rate: 0, exch: 1, poverty: 0, gini: 0, readiness: 1, crime: 0 };
+var GOOD_UP = { gdp: 1, growth: 1, infl: 0, u: 0, debtRatio: 0, bal: 1, rev: 1, approval: 1, pop: 1, disp: 1, healthCap: 1, healthAccess: 1, wait: 0, rate: 0, exch: 1, poverty: 0, gini: 0, readiness: 1, crime: 0, di: 1, legitimacy: 1, unrest: 0, loyalty: 1, corruption: 0 };
 
 // hash -> number between 0 and 1, so candidate lists dont use up the game's random numbers
 function hashRand(str) {
@@ -66,36 +71,6 @@ function hashRand(str) {
 // ======================================================================
 // NEW GAME
 // ======================================================================
-PAGES.newgame = function () {
-  var h = "<div id='newgame'>" + title("Start a new government");
-  h += "<p>Welcome to <b>Nationstate</b>, a turn-based simulator where you govern a made-up country. Each turn is one week. ";
-  h += "You set taxes and spending, pass laws, appoint ministers, deal with other countries and try to win elections. ";
-  h += "Everything that happens comes from the simulation rules, and you can always click through to see <i>why</i> a number changed.</p>";
-  if (localStorage.getItem("ngs_autosave")) h += "<div class='notice'>You have a game in progress. <a href='javascript:loadSlot(\"ngs_autosave\")'>Continue it</a> or start a new one below.</div>";
-  h += "<h2>1. Choose a country</h2>";
-  var first = true;
-  for (var k in TEMPLATES) {
-    var T = TEMPLATES[k];
-    h += "<div class='template'><label><input type='radio' name='tpl' value='" + k + "'" + (first ? " checked" : "") + "> <b>" + T.name + "</b> &mdash; " + T.title + "</label>";
-    h += "<div class='small'>Population " + sum(T.regions.map(function (r) { return r.pop; })).toFixed(1) + "m, GDP " + T.currencySymbol + " " + T.gdp + "bn, unemployment " + pct(T.unemployment) +
-      ", debt " + pct(T.debtRatio, 0) + " of GDP. " + T.govType + ", " + T.seats + " seats, " + T.regions.length + " regions. You lead the " + T.parties[0].name + ".</div></div>";
-    first = false;
-  }
-  h += "<h2>2. Customise (optional - leave blank for the default)</h2><table class='data'>";
-  h += "<tr><th>Country name</th><td><input type='text' id='ng_name' size=30></td></tr>";
-  h += "<tr><th>Capital</th><td><input type='text' id='ng_capital' size=20></td></tr>";
-  h += "<tr><th>Currency name</th><td><input type='text' id='ng_currency' size=12></td></tr>";
-  h += "<tr><th>Your name (leader)</th><td><input type='text' id='ng_leader' size=20></td></tr>";
-  h += "<tr><th>Your party's name</th><td><input type='text' id='ng_party' size=25></td></tr>";
-  h += "<tr><th>Flag (3 stripes)</th><td><input type='color' id='ng_f1' value='#17345B'> <input type='color' id='ng_f2' value='#FFFFFF'> <input type='color' id='ng_f3' value='#C8102E'> <span class='small'>(used for any country)</span></td></tr>";
-  h += "<tr><th>Difficulty</th><td><select id='ng_diff'><option value='story'>Story - more money, more forgiving</option><option value='standard' selected>Standard</option><option value='hard'>Hard - weaker finances, less trust</option><option value='sandbox'>Sandbox - you can't be voted out</option></select></td></tr>";
-  h += "<tr><th>Random seed</th><td><input type='number' id='ng_seed' value='" + (1000 + Math.floor(Math.random() * 90000)) + "' style='width:90px'> <span class='small'>Same seed + same decisions = same game</span></td></tr>";
-  h += "</table>";
-  h += "<p><button class='big' onclick='startNewGame()'>Take office &raquo;</button></p>";
-  h += "<p class='small'>Or <a href='#settings'>load a saved game</a>. Need help? Read <a href='#help'>How to play</a>.</p></div>";
-  return h;
-};
-
 // ======================================================================
 // DASHBOARD
 // ======================================================================
@@ -103,7 +78,7 @@ PAGES.dashboard = function () {
   var g = game;
   var h = title("National Dashboard");
   if (g.gameOver) {
-    h += "<div class='gameover'><b>YOUR GOVERNMENT HAS FALLEN</b><br>" + esc(g.gameOver.reason) + "<br>You governed for " + (g.gameOver.week - 1) + " weeks. ";
+    h += "<div class='gameover'><b>" + (g.gameOver.retired ? "YOU HAVE RETIRED FROM OFFICE" : "YOUR RULE IS OVER") + "</b><br>" + esc(g.gameOver.reason) + "<br>You governed for " + (g.gameOver.week - 1) + " weeks. ";
     h += "Look back over your time in office in the <a href='#archive'>Historical Archive</a> or <a href='#newgame'>start a new game</a>.</div>";
   }
   if (g.week <= 12 && TUTORIAL[g.week]) h += "<div class='tutorial'><b>Advisor (week " + g.week + " of 12):</b> " + TUTORIAL[g.week] + "</div>";
@@ -114,6 +89,9 @@ PAGES.dashboard = function () {
   // urgent this week
   var urgent = g.events.filter(function (e) { return e.week == g.week && e.urgent; });
   for (var i = 0; i < urgent.length; i++) h += "<div class='alert'><b>URGENT:</b> <a href='#event/" + urgent[i].id + "'>" + esc(urgent[i].title) + "</a></div>";
+  if (g.war) h += "<div class='alert'><b>AT WAR</b> with " + esc(countryOf(g, g.war.enemy).name) + " for " + g.war.weeks + " weeks. Front line: " + Math.round(g.war.front) + ". <a href='#defence'>War room &raquo;</a>" + (g.war.enemyOffer ? " <b>They have offered peace terms.</b>" : "") + "</div>";
+  if (g.politics.unrest > 55) h += "<div class='alert'><b>Unrest is dangerous</b> (" + Math.round(g.politics.unrest) + "/100). " + (g.constitution.assembly != "free" ? "With protest restricted, anger can turn into riots or revolution." : "Expect strikes and protests.") + "</div>";
+  if (g.defence.loyalty < 45) h += "<div class='alert'><b>The army is restless</b> (loyalty " + Math.round(g.defence.loyalty) + "/100). Raise defence pay or risk a coup.</div>";
   // pending decisions
   var pend = [];
   for (var i = 0; i < g.bills.length; i++) if (g.bills[i].stage == "AMENDMENT WINDOW") pend.push("Bill <a href='#bill/" + g.bills[i].id + "'>" + esc(g.bills[i].title) + "</a> is open for amendments (final vote next week)");
@@ -125,7 +103,7 @@ PAGES.dashboard = function () {
   var now = g.history[g.history.length - 1];
   var termStart = null;
   for (var i = 0; i < g.history.length; i++) if (g.history[i].w >= g.politics.termStart) { termStart = g.history[i]; break; }
-  var keys = ["gdp", "growth", "infl", "u", "debtRatio", "bal", "pop", "approval", "disp", "healthAccess", "wait"];
+  var keys = ["gdp", "growth", "infl", "u", "debtRatio", "bal", "pop", "approval", "disp", "healthAccess", "wait", "legitimacy", "unrest", "loyalty", "corruption"];
   for (var i = 0; i < keys.length; i++) {
     var ind = indicator(keys[i]);
     var f = diffFmt(ind), up = GOOD_UP[ind.key];
@@ -134,7 +112,7 @@ PAGES.dashboard = function () {
     h += chg(now[ind.key], w1 ? w1[ind.key] : null, f, up) + chg(now[ind.key], w4 ? w4[ind.key] : null, f, up) + chg(now[ind.key], w52 ? w52[ind.key] : null, f, up) + chg(now[ind.key], termStart ? termStart[ind.key] : null, f, up);
     h += "<td>" + (ind.why ? "<a href='#why/" + ind.why + "/4'>why?</a>" : "") + "</td></tr>";
   }
-  h += "<tr><td>" + tip("Majority") + "</td><td class='num'><a href='#parliament'>" + govSeats(g) + " seats</a></td><td colspan=5>" + g.constitution.majority + " needed for a majority. Government: " + govParties(g).map(function (p) { return esc(p.name); }).join(", ") + "</td></tr>";
+  if (g.constitution.legislature != "none") h += "<tr><td>" + tip("Majority") + "</td><td class='num'><a href='#parliament'>" + govSeats(g) + " seats</a></td><td colspan=5>" + g.constitution.majority + " needed for a majority. Government: " + govParties(g).map(function (p) { return esc(p.name); }).join(", ") + (decreeMode(g) ? " <b>(you rule by decree)</b>" : "") + "</td></tr>";
   h += "</table>";
 
   h += "<table width='100%'><tr><td valign=top width='50%'>";
@@ -170,16 +148,20 @@ function countryById(id) { for (var i = 0; i < game.foreign.length; i++) if (gam
 PAGES.cabinet = function (arg) {
   var g = game;
   var h = title("Cabinet and Ministries");
-  h += "<p>The " + esc(g.constitution.leaderTitle) + " appoints and dismisses ministers. Competence affects how fast a ministry can deliver (hiring staff, negotiating, readiness). Dismissing a coalition partner's minister annoys that party.</p>";
+  h += "<p>The " + esc(g.constitution.title) + " appoints and dismisses ministers. Competence affects how fast a ministry can deliver (hiring staff, negotiating, readiness). Dismissing a coalition partner's minister annoys that party.</p>";
   h += "<table class='data full'><tr><th>Ministry</th><th>Minister</th><th>Party</th><th class='num'>Competence</th><th class='num'>Approval</th><th class='num'>Budget</th><th>Since</th><th></th></tr>";
   for (var i = 0; i < g.cabinet.length; i++) {
     var m = g.cabinet[i];
     var line = null;
     for (var j = 0; j < SPENDING_LINES.length; j++) if (SPENDING_LINES[j].ministry == m.ministry) line = (line || 0) + g.budget.lines[SPENDING_LINES[j].id];
-    h += "<tr><td>" + ministryName(m.ministry) + "</td><td>" + esc(m.name) + "</td><td>" + esc(findParty(g, m.party).name) + "</td><td class='num'>" + Math.round(m.competence * 100) + "</td><td class='num'>" + pct(clamp(m.approval, 0, 1), 0) + "</td><td class='num'>" + (line ? money(g, line) : "-") + "</td><td>" + weekDate(g, m.since) + "</td>";
-    h += "<td><a href='#cabinet/" + m.ministry + "'>Replace</a></td></tr>";
+    if (m.mergedInto) {
+      h += "<tr class='small'><td>" + esc(ministryName(m.ministry)) + "</td><td colspan=6><i>Merged into " + esc(ministryName(m.mergedInto)) + "</i>" + (line ? " (budget " + money(g, line) + ")" : "") + "</td><td><a href='javascript:doSplit(\"" + m.ministry + "\")'>Split off</a></td></tr>";
+      continue;
+    }
+    h += "<tr><td>" + esc(ministryName(m.ministry)) + (m.load ? " <span class='small'>(+" + m.load + " merged)</span>" : "") + "</td><td>" + esc(m.name) + "</td><td>" + esc(findParty(g, m.party).name) + "</td><td class='num'>" + Math.round(m.competence * 100) + "</td><td class='num'>" + pct(clamp(m.approval, 0, 1), 0) + "</td><td class='num'>" + (line ? money(g, line) : "-") + "</td><td>" + weekDate(g, m.since) + "</td>";
+    h += "<td class='small'><a href='#cabinet/" + m.ministry + "'>Replace</a> | <a href='javascript:doRename(\"" + m.ministry + "\")'>Rename</a> | <a href='javascript:doMerge(\"" + m.ministry + "\")'>Merge</a></td></tr>";
   }
-  h += "</table>";
+  h += "</table><p class='small'>Merging a ministry saves some admin money, but one minister doing two jobs is less effective. Renaming is free.</p>";
   if (arg) {
     var m = minister(g, arg);
     h += "<h2>Replace the Minister for " + ministryName(arg) + "</h2>";
@@ -196,6 +178,34 @@ PAGES.cabinet = function (arg) {
   }
   return h;
 };
+
+function doRename(id) {
+  var n = prompt("New name for the " + ministryName(id) + ":", ministryName(id));
+  if (!n || !n.trim()) return;
+  renameMinistry(game, id, n.trim().slice(0, 60));
+  autosave(); route();
+}
+function doMerge(id) {
+  var g = game, opts = [];
+  for (var i = 0; i < g.cabinet.length; i++) if (g.cabinet[i].ministry != id && !g.cabinet[i].mergedInto) opts.push((opts.length + 1) + ". " + ministryName(g.cabinet[i].ministry));
+  var n = prompt("Merge the " + ministryName(id) + " into which ministry? Type the number:\n" + opts.join("\n"));
+  if (!n) return;
+  var pickName = opts[parseInt(n) - 1];
+  if (!pickName) { alert("Not a valid number."); return; }
+  var into = null;
+  for (var i = 0; i < g.cabinet.length; i++) if (ministryName(g.cabinet[i].ministry) == pickName.replace(/^\d+\. /, "")) into = g.cabinet[i].ministry;
+  var mine = cabinetEntry(g, id);
+  for (var i = 0; i < g.cabinet.length; i++) if (g.cabinet[i].mergedInto == id) { alert("Split off the ministries merged into this one first."); return; }
+  if (!mergeMinistry(g, id, into)) { alert("Can't merge those."); return; }
+  autosave(); route();
+}
+function doSplit(id) {
+  var g = game;
+  var c = candidates(g, id)[0];
+  if (!confirm("Make the " + ministryName(id) + " a separate ministry again, with " + c.name + " as minister?")) return;
+  splitMinistry(g, id, c.name);
+  autosave(); route();
+}
 
 function candidates(g, ministry) {
   var out = [], gp = govParties(g);
@@ -218,7 +228,7 @@ function appoint(ministry, idx) {
   m.name = c.name; m.party = c.party; m.competence = c.competence; m.approval = 0.5; m.since = g.week;
   g.politics.mood -= 0.005;
   g.commandLog.push({ week: g.week, cmd: "appoint", ministry: ministry, name: c.name });
-  addEvent(g, "appointment", 1, c.name + " appointed Minister for " + ministryName(ministry), { minister: c.name, ministry: ministryName(ministry) }, "Cabinet reshuffle by the " + g.constitution.leaderTitle + ".", 0);
+  addEvent(g, "appointment", 1, c.name + " appointed Minister for " + ministryName(ministry), { minister: c.name, ministry: ministryName(ministry) }, "Cabinet reshuffle by the " + g.constitution.title + ".", 0);
   autosave();
   go("cabinet");
 }
@@ -227,11 +237,13 @@ function appoint(ministry, idx) {
 // PARLIAMENT + BILLS
 // ======================================================================
 function seatBar(g, seats) {
-  var h = "<div class='seatbar'>";
+  var h = "<div class='seatbar'>", tot = 0;
+  for (var i = 0; i < g.parties.length; i++) tot += (seats ? seats[i] : g.parties[i].seats) || 0;
+  tot = tot || 1;
   for (var i = 0; i < g.parties.length; i++) {
     var p = g.parties[i], s = seats ? seats[i] : p.seats;
     if (!s) continue;
-    h += "<div style='background:" + p.color + ";width:" + (s / g.constitution.seats * 100) + "%' title='" + esc(p.name) + ": " + s + "'>" + s + "</div>";
+    h += "<div style='background:" + p.color + ";width:" + (s / tot * 100) + "%' title='" + esc(p.name) + ": " + s + "'>" + s + "</div>";
   }
   return h + "</div>";
 }
@@ -239,16 +251,26 @@ function seatBar(g, seats) {
 PAGES.parliament = function () {
   var g = game;
   var h = title("Parliament");
+  var con = g.constitution;
+  if (con.legislature == "none") return h + "<p>There is no legislature. The " + esc(con.title) + " makes all laws by decree. You can still <a href='#treasury'>change taxes and spending</a> or <a href='#law/composer'>issue a policy decree</a>; they take effect the following week.</p>" + "<h2>Decrees</h2>" + billTable(g, g.bills.slice().reverse());
+  h += "<div class='notice'>" + (con.legislature == "appointed" ? "The members are <b>appointed by the government</b>. " : "") + (decreeMode(g) ? "The legislature approves whatever the government sends it: laws pass by decree." : (con.legPower == "advisory" ? "The legislature is <b>advisory</b>: if it votes a bill down you can override it." : "Laws need a majority vote.")) + "</div>";
   h += "<p>" + g.constitution.seats + " seats. A majority needs <b>" + g.constitution.majority + "</b>. The government has <b>" + govSeats(g) + "</b>" + (govSeats(g) < g.constitution.majority ? " <span class='bad'>(MINORITY)</span>" : "") + ".</p>";
   h += seatBar(g);
   h += "<table class='data full'><tr><th>Party</th><th>Leader</th><th class='num'>Seats</th><th>Side</th><th class='num'>Economic position</th><th class='num'>Social position</th><th class='num'>Poll</th><th class='num'>Coalition patience</th></tr>";
   for (var i = 0; i < g.parties.length; i++) {
     var p = g.parties[i];
-    h += "<tr><td><span style='color:" + p.color + "'>&#9632;</span> " + esc(p.name) + (p.player ? " <b>(your party)</b>" : "") + "</td><td>" + esc(p.leader) + "</td><td class='num'>" + p.seats + "</td><td>" + (p.inGov ? "Government" : "Opposition") + "</td>";
+    h += "<tr><td><span style='color:" + p.color + "'>&#9632;</span> " + esc(p.name) + (p.player ? " <b>(your party)</b>" : "") + "</td><td>" + esc(p.leader) + "</td><td class='num'>" + p.seats + "</td><td>" + (p.banned ? "<span class='bad'>Banned</span>" : (p.inGov ? "Government" : "Opposition")) + "</td>";
     h += "<td class='num'>" + p.econ + " <span class='small'>(" + (p.econ < 40 ? "left" : p.econ > 60 ? "right" : "centre") + ")</span></td><td class='num'>" + p.social + "</td><td class='num'>" + pct(p.poll) + "</td>";
     h += "<td class='num'>" + (p.inGov && !p.player ? Math.round(p.patience) + "/80" : "-") + "</td></tr>";
   }
-  h += "</table><p class='small'>Positions are 0-100. Economic: 0 = far left, 100 = free market. Social: 0 = traditional, 100 = liberal. Coalition partners quit when their patience hits 0.</p>";
+  h += "</table>";
+  if (g.upper) {
+    h += "<h2>Upper chamber (" + g.upper.total + " seats, " + ({ regional: "represents the regions", elected: "elected nationally", appointed: "appointed" }[con.upperHouse]) + ")</h2>" + seatBar(g, g.upper.seats);
+    h += "<table class='data'><tr><th>Party</th><th class='num'>Seats</th></tr>";
+    for (var i = 0; i < g.parties.length; i++) if (g.upper.seats[i]) h += "<tr><td>" + esc(g.parties[i].name) + "</td><td class='num'>" + g.upper.seats[i] + "</td></tr>";
+    h += "</table><p class='small'>" + (con.upperHouse == "appointed" ? "Appointed members always back the government." : "Bills must also pass here.") + "</p>";
+  }
+  h += "<p class='small'>Positions are 0-100. Economic: 0 = far left, 100 = free market. Social: 0 = traditional, 100 = liberal. Coalition partners quit when their patience hits 0.</p>";
   if (g.politics.lastConfidence) {
     var c = g.politics.lastConfidence;
     h += "<h2>Confidence</h2><p>Last confidence vote (" + weekDate(g, c.week) + "): " + c.forGov + " for the government, " + c.against + " against. " + (c.lost ? "<b class='bad'>Government lost.</b>" : "Government survived.") + "</p>";
@@ -293,7 +315,7 @@ PAGES.bill = function (id) {
   h += "<h2>Changes in this bill</h2><table class='data'><tr><th>Item</th><th class='num'>Now</th><th class='num'>Proposed</th></tr>";
   for (var i = 0; i < b.changes.length; i++) {
     var c = b.changes[i];
-    h += "<tr><td>" + esc(c.name) + "</td><td class='num'>" + fmtVal(c.from) + " " + (c.unit || "") + "</td><td class='num'>" + fmtVal(c.to) + " " + (c.unit || "") + "</td></tr>";
+    h += "<tr><td>" + esc(c.name) + "</td><td class='num'>" + fmtVal(c.from, c) + " " + (c.unit || "") + "</td><td class='num'>" + fmtVal(c.to, c) + " " + (c.unit || "") + "</td></tr>";
   }
   h += "</table>";
   if (b.cost) h += "<p>Estimated annual effect at today's tax bases: revenue " + money(g, b.cost.revenue) + ", spending " + money(g, b.cost.spending) + ", <b>balance " + money(g, b.cost.balance) + "</b>." + (b.cost.oneOff ? " One-off debt change " + money(g, b.cost.oneOff) + "." : "") + "</p>";
@@ -302,12 +324,15 @@ PAGES.bill = function (id) {
     h += "<h2>Amend this bill</h2><p>You can change the proposed values before the final vote next week.</p><table class='data'>";
     for (var i = 0; i < b.changes.length; i++) {
       var c = b.changes[i];
-      h += "<tr><td>" + esc(c.name) + "</td><td><input type='number' step='any' id='am_" + i + "' value='" + roundNice(c.to) + "'> " + (c.unit || "") + "</td></tr>";
+      if (typeof c.to == "number" && c.kind != "amend") h += "<tr><td>" + esc(c.name) + "</td><td><input type='number' step='any' id='am_" + i + "' value='" + roundNice(c.to) + "'> " + (c.unit || "") + "</td></tr>";
+      else h += "<tr><td>" + esc(c.name) + "</td><td>" + fmtVal(c.to, c) + " <span class='small'>(withdraw and resubmit to change this)</span></td></tr>";
     }
     h += "</table><button onclick='doAmend(\"" + b.id + "\")'>Submit amendment</button> <button onclick='doWithdraw(\"" + b.id + "\")'>Withdraw bill</button>";
   } else if (b.stage == "COMMITTEE") {
     h += "<p><button onclick='doWithdraw(\"" + b.id + "\")'>Withdraw bill</button></p>";
   }
+  if (b.decree) h += "<div class='notice'>This was made law by the " + esc(g.constitution.title) + " without a vote.</div>";
+  if (b.canOverride && b.stage == "REJECTED") h += "<div class='alert'>The legislature voted this down, but it is only advisory. You can sign it anyway. That costs <b>5 legitimacy</b> and some public goodwill.<br><button onclick='doOverride(\"" + b.id + "\")'>Override the legislature</button></div>";
   h += "<h2>Record</h2><table class='data full'><tr><th>Week</th><th>Stage</th><th>Note</th></tr>";
   for (var i = 0; i < b.log.length; i++) h += "<tr><td>" + weekDate(g, b.log[i].week) + "</td><td>" + b.log[i].stage + "</td><td>" + esc(b.log[i].note) + "</td></tr>";
   h += "</table>";
@@ -326,7 +351,17 @@ PAGES.bill = function (id) {
   return h;
 };
 
-function fmtVal(v) { return typeof v == "number" ? roundNice(v) : esc(v); }
+function fmtVal(v, c) {
+  if (c && c.kind == "amend") {
+    for (var i = 0; i < CONST_FIELDS.length; i++) if (CONST_FIELDS[i].id == c.id && CONST_FIELDS[i].options)
+      for (var j = 0; j < CONST_FIELDS[i].options.length; j++) if (String(CONST_FIELDS[i].options[j][0]) == String(v)) return esc(CONST_FIELDS[i].options[j][1]);
+  }
+  if (typeof v == "boolean") return v ? "yes" : "no";
+  if (v && v.join) return v.map(function (x) { return "<span style='display:inline-block;width:12px;height:12px;border:1px solid #999;background:" + esc(x) + "'></span>"; }).join("");
+  if (typeof v == "string" && v.indexOf("data:image/") == 0) return cleanFlagImg(v) ? "<img src='" + v + "' width=45 height=30>" : "(picture)";
+  if (c && c.kind == "identity" && v === "") return "(none)";
+  return typeof v == "number" ? roundNice(v) : esc(v);
+}
 function roundNice(v) { return Math.abs(v) >= 10 ? Math.round(v * 10) / 10 : Math.round(v * 100) / 100; }
 
 function checksHtml(checks) {
@@ -342,9 +377,15 @@ function checksHtml(checks) {
 function doAmend(id) {
   var b = findBill(game, id);
   var changes = copy(b.changes);
-  for (var i = 0; i < changes.length; i++) changes[i].to = parseFloat($("am_" + i).value);
+  for (var i = 0; i < changes.length; i++) if ($("am_" + i)) changes[i].to = parseFloat($("am_" + i).value);
   var r = amendBill(game, id, changes);
   if (!r.ok) alert("Amendment rejected:\n" + (r.msg || r.checks.filter(function (c) { return !c.ok; }).map(function (c) { return c.name + ": " + c.msg; }).join("\n")));
+  autosave();
+  route();
+}
+function doOverride(id) {
+  if (!confirm("Sign this law over the legislature's objection?")) return;
+  overrideBill(game, id);
   autosave();
   route();
 }
@@ -364,21 +405,22 @@ PAGES.law = function (arg) {
   var h = title("Constitution and Law");
   h += "<div class='tabs'><a href='#law/constitution'" + (tab == "constitution" ? " class='current'" : "") + ">Constitution</a> <a href='#law/laws'" + (tab == "laws" ? " class='current'" : "") + ">Laws and policies in force</a> <a href='#law/composer'" + (tab == "composer" ? " class='current'" : "") + ">Policy composer</a> <a href='#law/amend'" + (tab == "amend" ? " class='current'" : "") + ">Amend the constitution</a></div>";
   if (tab == "constitution") {
+    h += constSummaryHtml(g);
     h += "<table class='data full'>";
     h += "<tr><th>System of government</th><td>" + esc(c.govType) + "</td></tr>";
-    h += "<tr><th>Head of government</th><td>" + esc(c.leaderTitle) + (g.template == "B" ? ", directly elected in a two-round vote" : ", chosen by parliament") + "</td></tr>";
-    h += "<tr><th>Legislature</th><td>One chamber, " + c.seats + " seats, majority " + c.majority + "</td></tr>";
-    h += "<tr><th>Electoral system</th><td>" + electionSystemName(c.electionSystem) + "</td></tr>";
-    h += "<tr><th>Term length</th><td>" + c.termYears + " years</td></tr>";
-    h += "<tr><th>Confidence rule</th><td>" + (c.confidenceRule ? "Government must keep the confidence of parliament. Losing a confidence vote triggers a snap election." : "None. The president serves a fixed term.") + "</td></tr>";
-    h += "<tr><th>Amendment procedure</th><td>" + esc(c.amendmentText) + " (needs " + c.supermajority + " votes" + (c.referendum ? " + referendum" : "") + ")</td></tr>";
-    h += "<tr><th>Fiscal rule</th><td>" + (c.fiscalRule ? "Deficit may not be made worse beyond " + c.fiscalRule + "% of GDP" : "None") + "</td></tr>";
-    h += "<tr><th>Central bank</th><td>" + (c.centralBankIndependent ? "Independent. Sets interest rates to hit 2% inflation." : "Under government direction (rates still follow the same rule, but markets charge more)") + "</td></tr>";
-    h += "<tr><th>Voting age</th><td>" + c.votingAge + "</td></tr>";
-    h += "<tr><th>Judiciary</th><td>Constitutional Court can strike down laws that break the procedures above. Courts budget: " + money(g, g.budget.lines.justice) + "</td></tr>";
-    h += "<tr><th>Regions</th><td>" + g.regions.length + " regions: " + g.regions.map(function (r) { return esc(r.name); }).join(", ") + (g.template == "B" ? ". Regional governments must approve amendments." : ". Regions run local services with central funding.") + "</td></tr>";
-    h += "<tr><th>Parties, unions, media</th><td>Legal and free. Media freedom is protected.</td></tr>";
-    h += "</table>";
+    h += "<tr><th>Democracy index</th><td><a href='#chart/di'>" + Math.round(g.politics.di) + "/100</a> (" + diLabel(g.politics.di) + ")</td></tr>";
+    h += "<tr><th>Legislature</th><td>" + (c.legislature == "none" ? "None" : c.seats + " seats" + (c.chambers == 2 ? " + upper chamber of " + c.upperSeats : "") + ", majority " + c.majority) + "</td></tr>";
+    h += "<tr><th>Electoral system</th><td>" + (electionsHeld(g) ? electionSystemName(c.electionSystem) : "No elections") + "</td></tr>";
+    h += "<tr><th>Amendment procedure</th><td>" + esc(c.amendmentText) + "</td></tr>";
+    var group = "";
+    for (var i = 0; i < CONST_FIELDS.length; i++) {
+      var f = CONST_FIELDS[i];
+      if (f.group != group) { group = f.group; h += "<tr><th colspan=2 class='grouphead'>" + group + "</th></tr>"; }
+      var v = f.id == "leaderTitle" ? c.title : c[f.id];
+      h += "<tr><td>" + f.name + "</td><td>" + fmtVal(v, { kind: "amend", id: f.id }) + "</td></tr>";
+    }
+    h += "<tr><th colspan=2 class='grouphead'>Regions</th></tr><tr><td>Regions</td><td>" + g.regions.length + ": " + g.regions.map(function (r) { return esc(r.name); }).join(", ") + "</td></tr>";
+    h += "</table><p><a href='#law/amend'>Amend the constitution &raquo;</a></p>";
   }
   if (tab == "laws") {
     h += "<h2>Policies in force</h2><table class='data full'><tr><th>Policy</th><th>Ministry</th><th class='num'>Setting</th><th>Since</th></tr>";
@@ -394,11 +436,11 @@ PAGES.law = function (arg) {
     h += "</table>";
   }
   if (tab == "composer") h += composerHtml(g);
-  if (tab == "amend") h += amendHtml(g);
+  if (tab == "amend") h += amendHtml(g) + "<div id='preview'></div>";
   return h;
 };
 
-function electionSystemName(s) { return { dhondt: "Proportional representation by region (D'Hondt)", fptp: "Single-member districts, first past the post", national: "National list proportional representation, 5% threshold" }[s]; }
+function electionSystemName(s) { return { dhondt: "Proportional representation by region (D'Hondt)", fptp: "Single-member districts, first past the post", national: "National list proportional representation, 5% threshold", mixed: "Mixed: half districts, half national list" }[s]; }
 
 function composerHtml(g) {
   var h = "<p>Build a policy from the approved effect library. Every field is required. The bill goes through the five checks (legal, fiscal, admin, economic, political) before it can be sent to parliament.</p>";
@@ -455,32 +497,6 @@ function composerPreview() {
   showPreview();
 }
 
-function amendHtml(g) {
-  var c = g.constitution;
-  var h = "<p>Constitutional amendments need <b>" + c.supermajority + " of " + c.seats + "</b> votes" + (c.referendum ? " and then a national referendum" : "") + ". The government has " + govSeats(g) + " seats, so you will need opposition support.</p>";
-  h += "<table class='data'>";
-  h += "<tr><th>Change</th><th>Now</th><th>New value</th></tr>";
-  h += "<tr><td>Parliamentary term (years)</td><td>" + c.termYears + "</td><td><select id='am_termYears'><option>3</option><option>4</option><option>5</option></select></td></tr>";
-  h += "<tr><td>Fiscal rule: max deficit, % of GDP (0 = no rule)</td><td>" + c.fiscalRule + "</td><td><input type='number' id='am_fiscalRule' value='" + c.fiscalRule + "' min=0 max=6></td></tr>";
-  h += "<tr><td>Electoral system</td><td>" + c.electionSystem + "</td><td><select id='am_electionSystem'><option value='dhondt'>Regional PR (D'Hondt)</option><option value='fptp'>First past the post</option><option value='national'>National list PR</option></select></td></tr>";
-  h += "<tr><td>Central bank independent?</td><td>" + (c.centralBankIndependent ? "yes" : "no") + "</td><td><select id='am_cb'><option value='1'>yes</option><option value='0'>no</option></select></td></tr>";
-  h += "</table><button onclick='amendPreview()'>Preview and check &raquo;</button><div id='preview'></div>";
-  afterRender.push(function () { $("am_termYears").value = c.termYears; $("am_electionSystem").value = c.electionSystem; $("am_cb").value = c.centralBankIndependent ? "1" : "0"; });
-  return h;
-}
-
-function amendPreview() {
-  var c = game.constitution, ch = [];
-  var t = parseInt($("am_termYears").value), f = parseFloat($("am_fiscalRule").value), e = $("am_electionSystem").value, cb = parseInt($("am_cb").value);
-  if (t != c.termYears) ch.push({ kind: "amend", id: "termYears", name: "Term length", from: c.termYears, to: t, min: 3, max: 5, unit: "years" });
-  if (f != c.fiscalRule) ch.push({ kind: "amend", id: "fiscalRule", name: "Fiscal rule (max deficit)", from: c.fiscalRule, to: f, min: 0, max: 6, unit: "% of GDP" });
-  if (e != c.electionSystem) ch.push({ kind: "amend", id: "electionSystem", name: "Electoral system", from: c.electionSystem, to: e });
-  if (cb != (c.centralBankIndependent ? 1 : 0)) ch.push({ kind: "amend", id: "cbIndependent", name: "Central bank independence", from: c.centralBankIndependent ? 1 : 0, to: cb, min: 0, max: 1 });
-  if (!ch.length) { alert("You haven't changed anything."); return; }
-  draft = { title: "Constitutional Amendment Bill", type: "amend", ministry: "justice", changes: ch };
-  showPreview();
-}
-
 // shared preview for all bill types
 function showPreview() {
   var g = game;
@@ -488,7 +504,7 @@ function showPreview() {
   var checks = validateBill(g, bill);
   var h = "<h2>Preview: " + esc(draft.title) + "</h2>";
   h += "<table class='data'><tr><th>Item</th><th class='num'>Now</th><th class='num'>Proposed</th></tr>";
-  for (var i = 0; i < draft.changes.length; i++) h += "<tr><td>" + esc(draft.changes[i].name) + "</td><td class='num'>" + fmtVal(draft.changes[i].from) + " " + (draft.changes[i].unit || "") + "</td><td class='num'>" + fmtVal(draft.changes[i].to) + " " + (draft.changes[i].unit || "") + "</td></tr>";
+  for (var i = 0; i < draft.changes.length; i++) h += "<tr><td>" + esc(draft.changes[i].name) + "</td><td class='num'>" + fmtVal(draft.changes[i].from, draft.changes[i]) + " " + (draft.changes[i].unit || "") + "</td><td class='num'>" + fmtVal(draft.changes[i].to, draft.changes[i]) + " " + (draft.changes[i].unit || "") + "</td></tr>";
   h += "</table>";
   h += "<p>Static costing (today's tax bases, before people and firms react): revenue <b>" + money(g, bill.cost.revenue) + "</b>/yr, spending <b>" + money(g, bill.cost.spending) + "</b>/yr, balance <b>" + money(g, bill.cost.balance) + "</b>/yr." + (bill.cost.oneOff ? " One-off debt change: " + money(g, bill.cost.oneOff) + "." : "") + "</p>";
   h += checksHtml(checks);
@@ -763,7 +779,9 @@ PAGES.elections = function (arg) {
   var g = game;
   var h = title("Elections and Parties");
   var due = g.politics.snapElection || g.politics.nextElection;
-  h += "<p>Next " + (g.politics.snapElection ? "<b>snap</b> " : "") + "general election: <b>" + weekDate(g, due) + "</b> (" + (due - g.week) + " weeks). System: " + electionSystemName(g.constitution.electionSystem) + ".</p>";
+  if (!electionsHeld(g)) h += "<div class='notice'>The constitution does not hold elections. Polls below are what people <i>would</i> vote. To bring elections back, <a href='#law/amend'>amend the constitution</a>.</div>";
+  else if (g.constitution.elections == "restricted") h += "<div class='notice'>Elections are tilted toward the government. You'll probably win, but each one costs legitimacy and annoys democracies abroad.</div>";
+  if (electionsHeld(g)) h += "<p>Next " + (g.politics.snapElection ? "<b>snap</b> " : "") + "general election: <b>" + weekDate(g, due) + "</b> (" + (due - g.week) + " weeks). System: " + electionSystemName(g.constitution.electionSystem) + ".</p>";
   h += "<h2>Opinion polls</h2>" + seatBar(g, g.parties.map(function (p) { return Math.round(p.poll * g.constitution.seats); })) + "<p class='small'>Bar shows what a uniform proportional result would look like.</p>";
   h += "<table class='data'><tr><th>Party</th><th class='num'>Poll</th><th class='num'>Seats now</th><th>Leader</th><th class='num'>Members</th></tr>";
   for (var i = 0; i < g.parties.length; i++) { var p = g.parties[i]; h += "<tr><td><span style='color:" + p.color + "'>&#9632;</span> " + esc(p.name) + "</td><td class='num'>" + pct(p.poll) + "</td><td class='num'>" + p.seats + "</td><td>" + esc(p.leader) + "</td><td class='num'>" + p.members.toLocaleString() + "</td></tr>"; }
@@ -896,6 +914,7 @@ function answerOffer(id, yes) {
 PAGES.defence = function () {
   var g = game, d = g.defence;
   var h = title("Defence and Security");
+  h += "<table class='data'><tr><td>" + tip("Army loyalty") + "</td><td class='num'><a href='#chart/loyalty'>" + Math.round(d.loyalty) + "/100</a></td></tr><tr><td>Military strength (ours)</td><td class='num'>" + Math.round(ourStrength(g)) + "</td></tr></table>";
   h += "<table class='data'><tr><td>" + tip("Readiness") + "</td><td class='num'><a href='#chart/readiness'>" + d.readiness.toFixed(0) + "/100</a></td></tr>";
   h += "<tr><td>Defence budget</td><td class='num'>" + money(g, g.budget.lines.defence) + " (" + pct(g.budget.lines.defence / g.flows.Y) + " of GDP)</td></tr>";
   h += "<tr><td>Conscription</td><td class='num'>" + (g.policies.conscription.active ? g.policies.conscription.value + " months" : "none") + "</td></tr>";
@@ -912,7 +931,7 @@ PAGES.defence = function () {
   h += "</table>";
   h += "<h2>Intelligence, borders and cyber</h2><p>Border security and intelligence are funded from the Police and Defence lines. Recorded crime: " + g.crime.toFixed(1) + " per 1000. ";
   h += "Cyber readiness: " + Math.round(40 + (minister(g, "digital").competence - 0.5) * 40 + (d.readiness - 55) * 0.3) + "/100.</p>";
-  h += "<p class='small'>Note: this release has no active military operations - conflicts are planned for a later version. Border incidents can still happen when readiness is low.</p>";
+  h += warRoomHtml(g);
   return h;
 };
 
@@ -1132,6 +1151,8 @@ PAGES.help = function () {
   h += "<li><b>Advance time</b> one week at a time (or press N), or 4/13 weeks at once. Fast-forward stops for urgent events.</li>";
   h += "<li><b>Read the results</b>: news, reports, polls. Use <i>why?</i> links to see the causes behind a change.</li>";
   h += "<li><b>Win elections.</b> Keep your coalition partners happy (Parliament page) and voters on side (Population page shows approval by group).</li></ol>";
+  h += "<h2>Your kind of state</h2><p>On the New Game page you can build any kind of country: a parliamentary democracy, a one-party state, an absolute monarchy, a military junta or your own mix. The <a href='#law'>constitution</a> decides how laws are made. In a democracy bills need votes and you must win elections. If you rule by decree, laws pass straight away, but you have to watch <b>legitimacy</b>, <b>unrest</b> and <b>army loyalty</b>. Let unrest boil over and you get riots or a revolution. Let the army go unpaid and you may face a coup. You can change the constitution during the game on the <a href='#law/amend'>amendment</a> page.</p>";
+  h += "<h2>War</h2><p>The <a href='#defence'>Defence</a> page shows the war room. Weak neighbours with bad relations can attack you, and you can declare war yourself. Strength comes from the defence budget, readiness, equipment, conscription, the minister and allies. Offer peace when the front line favours you.</p>";
   h += "<h2>The rules</h2><p>Simulation rules decide what happens. Text only explains it. The same save, decisions and random seed always produce the same result (try the replay check in Settings). Every turn is checked: GDP measured two ways must match, revenue minus spending must equal the balance, debt and population must add up. If not, the turn is thrown away.</p>";
   h += "<h2>Keyboard</h2><p>Tab moves between links and buttons. N advances one week.</p>";
   return h;

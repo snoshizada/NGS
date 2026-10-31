@@ -189,6 +189,113 @@ function runAllTests() {
     ok(g.politics.lastConfidence, "Scenario: 21. Losing coalition partners triggers a confidence vote", g.politics.lastConfidence ? (g.politics.lastConfidence.lost ? "lost" : "survived") : "");
   })();
 
+  // ---------- v0.2: making your own nation ----------
+  function customOpts(con) {
+    return { seed: 31, calm: true, custom: { regions: [{ name: "North", pop: 3, income: 0.9 }, { name: "South", pop: 4, income: 1.1 }, { name: "Coast", pop: 2, income: 1.3 }, { name: "Hills", pop: 1.5, income: 0.7 }, { name: "Isles", pop: 0.5, income: 0.8 }, { name: "Capital", pop: 2.5, income: 1.5 }], gdpPerCap: 25, debtRatio: 0.4, unemployment: 0.07, inflation: 0.03, oldShare: 0.18, youngShare: 0.25 }, constitution: con };
+  }
+  function monarchy() { var c = copy(TEMPLATES.A.constitution); c.executive = "monarch"; c.headOfState = "monarch_abs"; c.legislature = "appointed"; c.elections = "none"; c.press = "state"; c.judiciary = "controlled"; c.assembly = "banned"; c.religion = "state"; return c; }
+
+  (function () {
+    try {
+      var g = newGame("A", customOpts(monarchy()));
+      ok(g.regions.length == 6 && g.constitution.govType.indexOf("Absolute monarchy") >= 0, "Custom nation: 6 regions, absolute monarchy", g.constitution.govType);
+      ok(g.politics.di < 20, "Custom nation: democracy index is low for an absolute monarchy", Math.round(g.politics.di));
+      g = runWeeks(g, 100);
+      ok(true, "Custom nation: 100 weeks with all accounting checks passing", "approval " + pct(g.politics.approval, 1));
+      ok(!g.politics.nextElection, "Custom nation: no elections are held", "");
+      var b = passBill(g, [tax(g, "incomeBasic", g.taxes.incomeBasic + 1)]);
+      g = runWeeks(g, 2);
+      var bb = findBill(g, b.id);
+      ok(bb.decree && (bb.stage == "IMPLEMENTED" || bb.stage == "EXECUTIVE ASSENT"), "Decree: a bill becomes law without a vote", bb.stage);
+    } catch (e) { ok(false, "Custom nation (absolute monarchy)", e.message); }
+  })();
+
+  (function () {
+    try {
+      var c = copy(TEMPLATES.A.constitution); c.executive = "partyleader"; c.partySystem = "single"; c.elections = "free";
+      var g = newGame("A", customOpts(c));
+      var legal = g.parties.filter(function (p) { return !p.banned; });
+      ok(legal.length == 1 && legal[0].player, "Single-party state: only the ruling party is legal", legal.length + " legal parties");
+      g = runWeeks(g, 60);
+      ok(true, "Single-party state: 60 weeks run", "");
+    } catch (e) { ok(false, "Single-party state", e.message); }
+  })();
+
+  (function () {
+    try {
+      // switch Arvenia to a one-party state by amendment, as a dictator would
+      var g = newGame("A", { seed: 5, calm: true });
+      g.constitution.amendThreshold = 0.5;
+      for (var i = 0; i < g.parties.length; i++) if (!g.parties[i].player) g.parties[i].seats = 0; else g.parties[i].seats = g.constitution.seats;
+      var b = passBill(g, [{ kind: "amend", id: "partySystem", name: "Parties", from: "multi", to: "single" }], "amend");
+      g.constitution.referendum = false;
+      g = runWeeks(g, 8);
+      ok(g.constitution.partySystem == "single" && g.politics.di < 95 && g.parties.filter(function (p) { return p.banned; }).length > 0, "Amendment: switch to a one-party state lowers the democracy index", "stage " + findBill(g, b.id).stage + ", DI " + Math.round(g.politics.di));
+    } catch (e) { ok(false, "Amendment: one-party state", e.message); }
+  })();
+
+  (function () {
+    try {
+      var c = monarchy();
+      var g = newGame("A", customOpts(c));
+      var b = passBill(g, [{ kind: "amend", id: "press", name: "Press", from: "state", to: "free" }], "amend");
+      g = runWeeks(g, 3);
+      ok(g.constitution.press == "free", "Amendment by royal decree", findBill(g, b.id).stage);
+    } catch (e) { ok(false, "Amendment by decree", e.message); }
+  })();
+
+  (function () {
+    var g = newGame("A", { seed: 5, calm: true });
+    var bill = { type: "policy", changes: [policy(g, "surveillance", 70)] };
+    var checks = validateBill(g, bill);
+    ok(!checks[0].ok, "Independent courts block mass surveillance", checks[0].msg);
+  })();
+
+  (function () {
+    var bad = cleanFlagImg("javascript:alert(1)"), bad2 = cleanFlagImg("data:image/svg+xml;base64,PHN2Zz4="), good = cleanFlagImg("data:image/png;base64,iVBORw0KGgo=");
+    var cols = cleanFlag(["#ff0000", "red\" onmouseover=\"x", "#00f"]);
+    ok(!bad && !bad2 && good && cols.length == 2, "Flag uploads and colours are cleaned", cols.join(","));
+    var h = flagHtml({ flagImg: "data:image/png;base64,AAAA\"><script>", flag: ["#ff0000"] }, 30, 20);
+    ok(h.indexOf("<script") < 0, "Flag HTML can't be used to inject a script", "");
+  })();
+
+  (function () {
+    try {
+      function warRun() {
+        var g = newGame("B", { seed: 77, calm: true });
+        var enemy = g.foreign[0].id;
+        startWar(g, enemy, true);
+        return runWeeks(g, 30);
+      }
+      var a = warRun(), b = warRun();
+      ok(JSON.stringify(a.war || a.wars) == JSON.stringify(b.war || b.wars) && a.econ.gdp == b.econ.gdp, "War: same seed gives the same war", "front " + (a.war ? Math.round(a.war.front) : "over"));
+      var w = a.war || a.wars[a.wars.length - 1];
+      ok(w.ourCas > 0, "War: casualties are counted (and the population identity still holds)", Math.round(w.ourCas) + " soldiers");
+      if (a.war) { var r = makePeace(a, "white"); ok(r && (r.ok || r.reasons || r.msg !== undefined), "War: peace can be offered", r.ok ? "accepted" : "rejected"); }
+    } catch (e) { ok(false, "War", e.message); }
+  })();
+
+  (function () {
+    try {
+      var g = newGame("B", { seed: 3, calm: true });
+      g.constitution.termLimit = 1;
+      g.politics.termsServed = 1;
+      g.politics.nextElection = g.week + 1;
+      g = runWeeks(g, 2);
+      ok(g.gameOver && g.gameOver.retired, "Term limit: you retire at the end of your last term", g.gameOver ? g.gameOver.reason || "" : "no game over");
+    } catch (e) { ok(false, "Term limit", e.message); }
+  })();
+
+  (function () {
+    var g = newGame("A", { seed: 5, calm: true });
+    renameMinistry(g, "health", "Ministry of Wellbeing");
+    ok(g.ministryNames.health == "Ministry of Wellbeing", "Ministries can be renamed", "");
+    mergeMinistry(g, "digital", "industry");
+    ok(minister(g, "digital") === minister(g, "industry"), "Merged ministries share a minister", "");
+    g = runWeeks(g, 5);
+    ok(true, "Game runs after merging ministries", "");
+  })();
+
   return results;
 }
 
@@ -199,7 +306,7 @@ if (typeof window === "undefined" && typeof require !== "undefined") {
   var fs = require("fs"), vm = require("vm"), path = require("path");
   var ctx = { console: console, module: undefined };
   vm.createContext(ctx);
-  ["data.js", "sim.js", "tests.js"].forEach(function (f) {
+  ["data.js", "sim.js", "regime.js", "tests.js"].forEach(function (f) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, f), "utf8").replace('if (typeof window === "undefined" && typeof require !== "undefined")', "if (false)"), ctx, { filename: f });
   });
   var res = vm.runInContext("runAllTests()", ctx);
