@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Nationstate - self tests</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="wrapper" style="padding:10px">
+<h1>Nationstate self tests</h1>
+<p>Checks the accounting rules, that turns can be reproduced, and that policies push things the right way. <a href="index.html">Back to the game</a></p>
+<p id="status">Running... (takes a few seconds)</p>
+<table class="data full" id="out"></table>
+</div>
+<script src="js/data.js"></script>
+<script src="js/sim.js"></script>
+<script src="js/regime.js"></script>
+<script src="js/tests.js"></script>
+<script>
+// copy of the little helper from main.js that sim text uses
+function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+setTimeout(function () {
+  var res = runAllTests();
+  var pass = 0, h = "<tr><th>Result</th><th>Test</th><th>Detail</th></tr>";
+  for (var i = 0; i < res.length; i++) {
+    if (res[i].ok) pass++;
+    h += "<tr><td class='" + (res[i].ok ? "good" : "bad") + "'><b>" + (res[i].ok ? "PASS" : "FAIL") + "</b></td><td>" + esc(res[i].name) + "</td><td class='small'>" + esc(res[i].detail) + "</td></tr>";
+  }
+  document.getElementById("out").innerHTML = h;
+  document.getElementById("status").innerHTML = "<b>" + pass + " of " + res.length + " passed</b>";
+}, 50);
+</script>
+</body>
+</html>
