@@ -651,6 +651,7 @@ function newGame(key, opts) {
   if (cu.debtRatio !== undefined && cu.debtRatio !== "") T.debtRatio = clamp(parseFloat(cu.debtRatio), 0, 3);
   if (cu.unemployment) T.unemployment = clamp(parseFloat(cu.unemployment), 0.01, 0.4);
   if (cu.inflation !== undefined && cu.inflation !== "") T.inflation = clamp(parseFloat(cu.inflation), -0.02, 0.3);
+  if (cu.policyRate) T.policyRate = clamp(parseFloat(cu.policyRate), 0, 0.3);
   if (cu.oldShare) T.oldShare = clamp(parseFloat(cu.oldShare), 0.03, 0.4);
   if (cu.youngShare) T.youngShare = clamp(parseFloat(cu.youngShare), 0.1, 0.5);
   if (opts.parties && opts.parties.length >= 2) {
@@ -663,7 +664,9 @@ function newGame(key, opts) {
   if (opts.constitution) for (var k in opts.constitution) con[k] = opts.constitution[k];
   g.constitution = normalizeConstitution(con, T.regions.length);
   g.regions = T.regions.map(function (r) { return { name: r.name, pop: r.pop, income: r.income, unemp: r.unemp, seats: r.seats || 0, protestCooldown: 0 }; });
-  g.pop = { old: T.oldShare, young: T.youngShare, births: 0, deaths: 0, immig: 0, emig: 0 };
+  g.pop = { old: T.oldShare, young: T.youngShare, old0: T.oldShare, births: 0, deaths: 0, immig: 0, emig: 0 };
+  g.pop.birthBase = cu.birthRate ? clamp(parseFloat(cu.birthRate), 0.005, 0.045) : T.youngShare / 18 * 1.04;
+  g.pop.deathBase = cu.deathRate ? clamp(parseFloat(cu.deathRate), 0.003, 0.02) : 0.0095 + (T.oldShare - 0.2) * 0.03;
   regionSeats(g);
   var debtRatio = T.debtRatio, trust = 0;
   if (diff == "story") { debtRatio *= 0.8; trust = 0.05; }
@@ -679,11 +682,11 @@ function newGame(key, opts) {
     wage: 0.52 * T.gdp / E,
     policyRate: T.policyRate, exch: 100, foreignPrice: 1, worldDemand: 1,
     confidence: 1, priceShock: 0, energyPrice: 1,
-    importShare: key == "B" ? 0.2 : (key == "A" ? 0.32 : 0.28),
+    importShare: cu.importShare ? clamp(parseFloat(cu.importShare), 0.1, 0.5) : (key == "B" ? 0.2 : (key == "A" ? 0.32 : 0.28)),
     inv0: 0.2 * T.gdp, realRate0: T.policyRate - T.inflation,
     emissions: T.gdp * 0.15, emissionsIntensity: 0.15,
     tradeFactor: 1, publicCapital: 1,
-    L0: L, prod0: T.gdp / E, worldTrend: 1
+    L0: L, prod0: T.gdp / E, worldTrend: 1, cbTarget: cu.cbTarget ? clamp(parseFloat(cu.cbTarget), 0.01, 0.08) : 0.02
   };
   g.taxes = copy(T.taxes);
   g.taxes0 = copy(T.taxes);
@@ -698,6 +701,7 @@ function newGame(key, opts) {
   g.policies.immigration = { active: true, value: key == "B" ? 40 : 20, since: 0, extra: 0 };
   g.policies.retireage = { active: true, value: key == "B" ? 62 : 65, since: 0, extra: 0 };
   g.policies.guncontrol = { active: true, value: key == "A" ? 75 : (key == "B" ? 30 : 60), since: 0, extra: 0 };
+  if (cu.regions && cu.regions.length) g.policies.immigration.value = clamp(Math.round(g.policies.immigration.value * newPop / oldPop), 1, 200);
   g.policies0 = copy(g.policies);
   g.flags = { energyPublic: key == "C", railPrivate: false };
   var debt = debtRatio * T.gdp;
@@ -800,6 +804,7 @@ function newGame(key, opts) {
   f = calcFlows(g, true);
   g.flows = f;
   setRefs(g);
+  g.pop.gpc0 = g.econ.realGdp / totalPop(g);
   initCohorts(g);
   calibratePolls(g);
   setupLegislature(g);
@@ -952,7 +957,7 @@ function calcFlows(g, initial) {
   if (g.war) f.I *= 0.9;
   f.I *= 1 + LX.inv;
   var compet = Math.pow(e.foreignPrice / e.price, 0.6) * Math.pow(100 / e.exch, 0.6);
-  f.X = (initial && !e.exportsBase ? 0 : e.exportsBase) * e.foreignPrice * e.worldDemand * e.worldTrend * e.tradeFactor * compet * (1 + LX.exp);
+  f.X = (initial && !e.exportsBase ? 0 : e.exportsBase) * e.foreignPrice * e.worldDemand * e.worldTrend * Math.pow(e.labourForce / e.L0, 0.6) * e.tradeFactor * compet * (1 + LX.exp);
   var tariffEffect = 1 - 1.5 * (t.tariff - g.taxes0.tariff) / 100;
   f.M = e.importShare * (f.C + f.I) * tariffEffect * Math.pow(e.exch / 100, 0.4) * (1 + LX.imp);
   f.Y = f.C + f.G + f.I + f.X - f.M;
@@ -1098,8 +1103,10 @@ function advanceWeek(g0) {
   e.publicCapital += (infraSpend / g.budget.lines0.transport - 1) * 0.0004 - (e.publicCapital - 1) * 0.002;
   var wageGrowth = e.inflExp + 0.012 + 0.5 * (e.natU - u);
   e.wage *= 1 + wageGrowth / 52;
-  for (var k in g.budget.lines) g.budget.lines[k] *= 1 + wageGrowth / 52;
+  var popBefore = totalPop(g);
   updatePopulation(g, u);
+  var popGrowth = totalPop(g) / popBefore - 1;
+  for (var k in g.budget.lines) g.budget.lines[k] *= (1 + wageGrowth / 52) * (1 + popGrowth);
   var potential = e.labourForce * (1 - e.natU) * e.prod;
   var gap = (e.gdp / e.price) / potential - 1;
   var energyShock = 0;
@@ -1109,7 +1116,7 @@ function advanceWeek(g0) {
   var carbonEffect = (g.taxes.carbon - g.taxes0.carbon) * 0.00003;
   var inflTarget = e.inflExp + 0.35 * gap + energyShock * 0.05 + publicEnergy + carbonEffect + (g.constitution.economy == "planned" ? -0.005 : 0) + (g.war ? 0.01 : 0) + g.lawFx.infl;
   e.infl += (inflTarget - e.infl) * 0.1;
-  e.inflExp += (0.02 - e.inflExp) * 0.003 + (e.infl - e.inflExp) * 0.01;
+  e.inflExp += ((e.cbTarget || 0.02) - e.inflExp) * 0.003 + (e.infl - e.inflExp) * 0.01;
   var jump = e.priceShock * 0.25;
   e.priceShock -= jump;
   if (Math.abs(e.priceShock) < 1e-6) e.priceShock = 0;
@@ -1186,7 +1193,7 @@ function refinanceDebt(g) {
 }
 function centralBank(g, gap) {
   var e = g.econ;
-  var target = 0.01 + e.infl + 0.5 * (e.infl - 0.02) + 0.5 * gap;
+  var target = 0.01 + e.infl + 0.5 * (e.infl - (e.cbTarget || 0.02)) + 0.5 * gap;
   target = clamp(target, 0, 0.2);
   var old = e.policyRate;
   var move = clamp(target - e.policyRate, -0.0025, 0.0025);
@@ -1200,12 +1207,14 @@ function centralBank(g, gap) {
 function updatePopulation(g, u) {
   var births = 0, deaths = 0, immig = 0, emig = 0;
   var P = totalPop(g);
+  if (g.pop.birthBase == null) { g.pop.old0 = g.pop.old; g.pop.birthBase = g.pop.young / 18 * 1.04; g.pop.deathBase = 0.0095 + (g.pop.old - 0.2) * 0.03; g.pop.gpc0 = g.econ.realGdp / P; }
+  var trans = Math.pow(clamp(g.econ.realGdp / P / g.pop.gpc0, 0.3, 3), -0.25);
   var immQuota = g.policies.immigration.active ? g.policies.immigration.value / 1000 : 0;
   for (var i = 0; i < g.regions.length; i++) {
     var r = g.regions[i];
     var share = r.pop / P;
-    var b = r.pop * (0.0105 - (g.pop.old - 0.2) * 0.02 + pv(g, "childbenefit") / g.econ.gdp * 0.02) * (1 + (g.lawFx ? g.lawFx.births : 0)) / 52;
-    var d = r.pop * (0.0095 + (g.pop.old - 0.2) * 0.03 - (g.services.health.access - g.services.health.access0) * 0.004) / 52;
+    var b = r.pop * ((g.pop.birthBase - (g.pop.old - g.pop.old0) * 0.02) * trans + pv(g, "childbenefit") / g.econ.gdp * 0.02) * (1 + (g.lawFx ? g.lawFx.births : 0)) / 52;
+    var d = r.pop * (g.pop.deathBase + (g.pop.old - g.pop.old0) * 0.03 - (g.services.health.access - g.services.health.access0) * 0.004) / 52;
     var im = (immQuota * share * (r.income > 1.1 ? 1.4 : 0.9)) / 52;
     var em = r.pop * Math.max(0, 0.002 + (u * r.unemp - g.econ.natU) * 0.05) / 52;
     var lm = g.lawFx ? g.lawFx.migr * share / 52 : 0;
@@ -1214,8 +1223,12 @@ function updatePopulation(g, u) {
     births += b; deaths += d; immig += im; emig += em;
   }
   g.pop.births = births; g.pop.deaths = deaths; g.pop.immig = immig; g.pop.emig = emig;
-  g.pop.old += 0.0015 / 52;
-  g.pop.young -= 0.001 / 52;
+  var P2 = totalPop(g), Y = g.pop.young * P, O = g.pop.old * P, M = P - Y - O, net = immig - emig;
+  var oldDeaths = clamp(g.pop.old * 3.5, 0.15, 0.85);
+  Y += births - Y / 18 / 52 - deaths * 0.08 + net * 0.2;
+  O += M * (0.0035 + 0.06 * g.pop.old) / 52 - deaths * oldDeaths + net * 0.03;
+  g.pop.young = clamp(Y / P2, 0.08, 0.55);
+  g.pop.old = clamp(O / P2, 0.02, 0.45);
 }
 function runProgrammes(g) {
   var hs = g.services.health;
@@ -4919,30 +4932,132 @@ function ngDefaults(key) {
     infl: Math.round(T.inflation * 1000) / 10, old: Math.round(T.oldShare * 100), young: Math.round(T.youngShare * 100),
     con: copy(T.constitution),
     parties: T.parties.map(function (p) { return { name: p.name, econ: p.econ, social: p.social, color: p.color, seats: p.seats, inGov: !!p.inGov }; }),
-    difficulty: "standard", seed: 1000 + Math.floor(Math.random() * 90000)
+    difficulty: "standard", seed: 1000 + Math.floor(Math.random() * 90000),
+    mode: "own", base: { size: "small", wealth: "rich", land: "coast", history: "stable" }, regionNames: [], nameSeed: Math.floor(Math.random() * 100000)
   };
+}
+var NG_SIZE = [["tiny", "Tiny (about 1 million people)", 1.2], ["small", "Small (about 5 million)", 5], ["medium", "Medium (about 15 million)", 15], ["large", "Large (about 45 million)", 45], ["huge", "Huge (about 140 million)", 140]];
+var NG_WEALTH = [["poor", "Poor", 0], ["developing", "Developing", 1], ["middle", "Middle income", 2], ["welloff", "Well-off", 3], ["rich", "Rich", 4]];
+var NG_LAND = [["coast", "Coastal trading nation"], ["plains", "Farmland and plains"], ["mountains", "Mountains and valleys"], ["islands", "Islands"], ["resources", "Rich in oil and minerals"], ["cities", "One huge city and countryside"]];
+var NG_HISTORY = [["stable", "Steady and stable"], ["boom", "Booming"], ["crash", "Just had a crash"], ["decline", "Slow decline"], ["new", "Newly independent"]];
+var NG_ROOTS = {
+  coast: ["Coast", "Bay", "Haven", "Strand", "Shore", "Firth", "Harbour", "Cape", "Point"],
+  plains: ["Plains", "Fields", "Downs", "Vale", "Meadows", "Steppe", "Lowlands", "Marches", "Prairie"],
+  mountains: ["Highlands", "Peaks", "Valley", "Pass", "Ridge", "Uplands", "Glen", "Crags", "Hills"],
+  islands: ["Isles", "Island", "Reef", "Atoll", "Keys", "Sound", "Islets", "Cay", "Archipelago"],
+  resources: ["Basin", "Oilfields", "Ridge", "Mines", "Desert", "Wells", "Badlands", "Mesa", "Delta"],
+  cities: ["Province", "Shire", "Country", "Districts", "Valley", "Plains", "Hills", "Lakes", "Forest"]
+};
+var NG_PRE = ["North", "South", "East", "West", "Upper", "Lower", "Greater", "Far", "Old", "New", "Central", "Inner"];
+var NG_SYL = ["Kar", "Vel", "Mor", "Ost", "Bren", "Tal", "Ard", "Lun", "Sar", "Dov", "Ker", "Mal", "Rho", "Ven", "Gal", "Tor"];
+function ngVal(list, k, i) { for (var j = 0; j < list.length; j++) if (list[j][0] == k) return list[j][i]; return list[0][i]; }
+function ngWorkOut(S) {
+  var b = S.base, w = ngVal(NG_WEALTH, b.wealth, 2), land = b.land, hist = b.history;
+  var popTotal = ngVal(NG_SIZE, b.size, 2);
+  var perCap = [4, 10, 22, 40, 62][w];
+  var young = [0.42, 0.33, 0.25, 0.2, 0.17][w], old = [0.04, 0.07, 0.12, 0.17, 0.21][w];
+  var unemp = [0.08, 0.075, 0.065, 0.055, 0.045][w], infl = [0.07, 0.05, 0.035, 0.025, 0.02][w], debt = [0.45, 0.5, 0.55, 0.6, 0.65][w];
+  var hm = { stable: [1, 1, 0, 1], boom: [0.7, 1.4, -0.2, 1.08], crash: [1.8, 1.5, 0.55, 0.92], decline: [1.4, 1.2, 0.35, 0.95], "new": [1.3, 2, -0.3, 0.9] }[hist];
+  unemp = Math.min(0.16, unemp * hm[0]); infl = Math.min(0.09, infl * hm[1]); debt = Math.max(0.05, debt + hm[2]); perCap *= hm[3];
+  if (land == "resources") { perCap *= 1.15; infl *= 1.1; }
+  if (land == "mountains") perCap *= 0.92;
+  if (land == "islands" && w < 3) perCap *= 0.95;
+  var imp = { coast: 0.38, plains: 0.24, mountains: 0.22, islands: 0.42, resources: 0.3, cities: 0.33 }[land];
+  var n = { tiny: 2, small: 4, medium: 5, large: 7, huge: 9 }[b.size] + (land == "islands" ? 1 : 0) - (land == "cities" ? 1 : 0);
+  n = clamp(n, 2, 10);
+  var spread = { coast: 0.25, plains: 0.2, mountains: 0.3, islands: 0.3, resources: 0.4, cities: 0.35 }[land] * (w <= 1 ? 1.3 : 1);
+  var capShare = land == "cities" ? 0.38 : 1.5 / n;
+  var seed = S.nameSeed || 1, used = {};
+  function rnd() { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; }
+  var regions = [];
+  for (var i = 0; i < n; i++) {
+    var nm;
+    if (i == 0) nm = land == "cities" ? (S.capital || "Capital") + " Metropolitan" : "Capital Region";
+    else { var tries = 0; do { nm = (rnd() < 0.55 ? NG_PRE[Math.floor(rnd() * NG_PRE.length)] + " " : NG_SYL[Math.floor(rnd() * NG_SYL.length)] + "a ") + NG_ROOTS[land][Math.floor(rnd() * NG_ROOTS[land].length)]; tries++; } while (used[nm] && tries < 20); }
+    used[nm] = 1;
+    if (S.regionNames && S.regionNames[i]) nm = S.regionNames[i];
+    var pop = i == 0 ? capShare : (1 - capShare) / (n - 1) * (0.7 + 0.6 * rnd());
+    var inc = i == 0 ? 1 + spread : 1 + spread * 0.6 - spread * 1.6 * i / Math.max(1, n - 1) + (rnd() - 0.5) * 0.1;
+    regions.push({ name: nm, pop: pop, income: inc });
+  }
+  var ps = sum(regions.map(function (r) { return r.pop; })), avg = 0;
+  for (var i = 0; i < n; i++) { regions[i].pop = Math.round(regions[i].pop / ps * popTotal * 100) / 100; avg += regions[i].pop * regions[i].income; }
+  avg /= sum(regions.map(function (r) { return r.pop; }));
+  for (var i = 0; i < n; i++) regions[i].income = Math.round(clamp(regions[i].income / avg, 0.3, 3) * 100) / 100;
+  var key = (hist == "crash" || hist == "decline") ? "C" : (w >= 3 ? "A" : "B");
+  return {
+    key: key, regions: regions, gdpPerCap: Math.round(perCap * 10) / 10, debt: Math.round(debt * 100), unemp: Math.round(unemp * 1000) / 10, infl: Math.round(infl * 1000) / 10,
+    old: Math.round(old * 100), young: Math.round(young * 100), importShare: imp,
+    birthRate: young / 18 * [1.35, 1.2, 1.08, 1.03, 1.02][w], deathRate: [0.008, 0.007, 0.0075, 0.009, 0.0095][w],
+    lifeExp: [64, 70, 75, 79, 82][w]
+  };
+}
+function ngSel(id, list, v, onch) {
+  return "<select id='" + id + "' onchange='" + onch + "'>" + list.map(function (o) { return "<option value='" + o[0] + "'" + (o[0] == v ? " selected" : "") + ">" + o[1] + "</option>"; }).join("") + "</select>";
+}
+function ngBaseHtml(S) {
+  var W = ngWorkOut(S), sym = S.symbol || "", pop = sum(W.regions.map(function (r) { return r.pop; }));
+  var h = "<table class='data'>";
+  h += "<tr><th>How big is it?</th><td>" + ngSel("ng_b_size", NG_SIZE, S.base.size, "ngBase()") + "</td></tr>";
+  h += "<tr><th>How wealthy?</th><td>" + ngSel("ng_b_wealth", NG_WEALTH, S.base.wealth, "ngBase()") + "</td></tr>";
+  h += "<tr><th>What is the land like?</th><td>" + ngSel("ng_b_land", NG_LAND, S.base.land, "ngBase()") + "</td></tr>";
+  h += "<tr><th>Recent history</th><td>" + ngSel("ng_b_history", NG_HISTORY, S.base.history, "ngBase()") + "</td></tr>";
+  h += "</table>";
+  h += "<div class='helpbox'><b>What the game worked out from that:</b> " + pop.toFixed(1) + "m people, GDP " + sym + " " + Math.round(pop * W.gdpPerCap) + "bn (" + sym + " " + W.gdpPerCap + "k a head), ";
+  h += "unemployment " + W.unemp + "%, inflation " + W.infl + "%, debt " + W.debt + "% of GDP. ";
+  h += "Ages: " + W.young + "% children, " + (100 - W.young - W.old) + "% working age, " + W.old + "% over 65. ";
+  h += "About " + (W.birthRate * 1000).toFixed(0) + " births and " + (W.deathRate * 1000).toFixed(0) + " deaths a year per 1,000 people, life expectancy around " + W.lifeExp + ". ";
+  h += "These all change as you play: people age, have children, move and emigrate, and the economy grows or shrinks with your choices.</div>";
+  h += "<table class='data'><tr><th>Region (you can rename them)</th><th>People</th><th>Income vs average</th></tr>";
+  for (var i = 0; i < W.regions.length; i++) {
+    var r = W.regions[i];
+    h += "<tr><td><input type='text' id='ng_rn" + i + "' value='" + esc(r.name) + "' size=24 maxlength=40 onchange='ngRegionName(" + i + ", this.value)'></td><td class='num'>" + r.pop.toFixed(2) + "m</td><td class='num'>" + Math.round(r.income * 100) + "%</td></tr>";
+  }
+  h += "</table><p><button onclick='ngState.nameSeed=Math.floor(Math.random()*100000);ngState.regionNames=[];ngRedraw()'>New region names</button></p>";
+  return h;
+}
+function ngBase() {
+  ngRead();
+  var b = ngState.base, old = ngVal(NG_SIZE, b.size, 0) + b.land;
+  b.size = $("ng_b_size").value; b.wealth = $("ng_b_wealth").value; b.land = $("ng_b_land").value; b.history = $("ng_b_history").value;
+  if (ngVal(NG_SIZE, b.size, 0) + b.land != old) ngState.regionNames = [];
+  var k = ngWorkOut(ngState).key;
+  if (k != ngState.template) { ngState.template = k; ngState.parties = ngDefaults(k).parties; }
+  ngRedraw();
+}
+function ngRegionName(i, v) { ngState.regionNames[i] = v; }
+function ngMode(m) {
+  ngRead();
+  if (m == "own") { ngState.mode = "own"; var k = ngWorkOut(ngState).key; ngState.template = k; ngState.parties = ngDefaults(k).parties; }
+  else ngState.mode = "ready";
+  ngRedraw();
 }
 function ngFakeGame() {
   var c = normalizeConstitution(copy(ngState.con), ngState.regions.length);
   return { constitution: c, policies: {} };
 }
 PAGES.newgame = function () {
-  if (!ngState) ngState = ngDefaults("A");
+  if (!ngState) { ngState = ngDefaults("A"); ngState.name = "Republic of Valdora"; ngState.capital = "Port Elm"; ngState.languages = "Valdoran"; }
   var S = ngState;
   var h = "<div id='newgame'>" + title("Found a nation");
   h += "<p>Welcome to <b>Nationstate</b>, a turn-based simulator where you govern a country one week at a time. ";
-  h += "Start from one of the ready-made countries, or build your own: its name, flag, land, people, parties and the whole constitution. ";
+  h += "Make your own country by answering four questions about it (the game works out the economy and the people from your answers), or pick a ready-made one. Then choose its name, flag and how it is governed. ";
   h += "Every choice changes how the game plays. A democracy has to win elections, a dictatorship has to keep the army and the streets on its side.</p>";
   var auto = null;
   try { auto = JSON.parse(localStorage.getItem("ngs_autosave") || "null"); } catch (e) { auto = null; }
   if (auto && auto.game && auto.game.version == GAME_VERSION) h += "<div class='notice'>You have a game in progress. <a href='javascript:loadSlot(\"ngs_autosave\")'>Continue it</a> or start a new one below.</div>";
   else if (auto) h += "<div class='notice'>Your last game was made with an older version (" + esc(auto.game ? auto.game.version : "?") + ") and can't be continued in this one. Start a new nation below.</div>";
-  h += "<h2>1. Starting point</h2><p class='small'>Picking one fills in everything below with that country's numbers. Then change whatever you like.</p>";
-  for (var k in TEMPLATES) {
-    var T = TEMPLATES[k];
-    h += "<div class='template'><label><input type='radio' name='tpl' value='" + k + "'" + (S.template == k ? " checked" : "") + " onclick='ngPickTemplate(\"" + k + "\")'> <b>" + T.name + "</b> &mdash; " + T.title + "</label>";
-    h += "<div class='small'>Population " + sum(T.regions.map(function (r) { return r.pop; })).toFixed(1) + "m, GDP " + T.currencySymbol + " " + T.gdp + "bn, unemployment " + pct(T.unemployment) + ", debt " + pct(T.debtRatio, 0) + " of GDP, " + T.regions.length + " regions.</div></div>";
+  h += "<h2>1. Starting point</h2>";
+  h += "<div class='template'><label><input type='radio' name='mode' value='own'" + (S.mode == "own" ? " checked" : "") + " onclick='ngMode(\"own\")'> <b>Make my own country</b> &mdash; answer four questions and the game works out the rest</label></div>";
+  h += "<div class='template'><label><input type='radio' name='mode' value='ready'" + (S.mode == "ready" ? " checked" : "") + " onclick='ngMode(\"ready\")'> <b>Use a ready-made country</b></label>";
+  if (S.mode == "ready") {
+    for (var k in TEMPLATES) {
+      var T = TEMPLATES[k];
+      h += "<div style='margin:4px 0 4px 22px'><label><input type='radio' name='tpl' value='" + k + "'" + (S.template == k ? " checked" : "") + " onclick='ngPickTemplate(\"" + k + "\")'> <b>" + T.name + "</b> &mdash; " + T.title + "</label>";
+      h += "<div class='small'>Population " + sum(T.regions.map(function (r) { return r.pop; })).toFixed(1) + "m, GDP " + T.currencySymbol + " " + T.gdp + "bn, unemployment " + pct(T.unemployment) + ", debt " + pct(T.debtRatio, 0) + " of GDP, " + T.regions.length + " regions.</div></div>";
+    }
   }
+  h += "</div>";
   h += "<h2>2. Name and identity</h2><table class='data'>";
   h += ngText("Country name", "name", 34) + ngText("Capital city", "capital", 20) + ngText("Currency name", "currency", 14) + ngText("Currency symbol", "symbol", 4);
   h += ngText("Language(s)", "languages", 24) + ngText("National motto", "motto", 40) + ngText("Your name (blank = random)", "leader", 22) + ngText("Your party / movement", "party", 28);
@@ -4956,27 +5071,13 @@ PAGES.newgame = function () {
   if (S.flag.length > 1) h += "<button onclick='ngRead();ngState.flag.pop();ngRedraw()'>- stripe</button> ";
   h += "<br><label><input type='checkbox' id='ng_fvert'" + (S.flagVertical ? " checked" : "") + " onchange='ngRead();ngFlagPreview()'> Vertical stripes</label></p>";
   h += "</td></tr></table>";
-  h += "<h2>4. Land and people</h2>";
-  h += "<table class='data'><tr><th>Region / province</th><th>Population (millions)</th><th>Income (1 = national average)</th><th></th></tr>";
-  for (var i = 0; i < S.regions.length; i++) {
-    var r = S.regions[i];
-    h += "<tr><td><input type='text' id='ng_rn" + i + "' value='" + esc(r.name) + "' size=22 maxlength=40></td><td><input type='number' id='ng_rp" + i + "' value='" + r.pop + "' step='0.1' min='0.05' style='width:80px'></td>";
-    h += "<td><input type='number' id='ng_ri" + i + "' value='" + r.income + "' step='0.05' min='0.3' max='3' style='width:70px'></td>";
-    h += "<td>" + (S.regions.length > 2 ? "<a href='javascript:ngDelRegion(" + i + ")'>remove</a>" : "") + "</td></tr>";
-  }
-  h += "</table>";
-  if (S.regions.length < 10) h += "<p><button onclick='ngAddRegion()'>+ Add a region</button> <span class='small'>(2 to 10 regions)</span></p>";
-  h += "<table class='data'>";
-  h += ngNum("GDP per person (thousands)", "gdpPerCap", 1, 200, 0.5) + ngNum("Government debt (% of GDP)", "debt", 0, 300, 1);
-  h += ngNum("Unemployment (%)", "unemp", 1, 40, 0.5) + ngNum("Inflation (%)", "infl", -2, 30, 0.1);
-  h += ngNum("Over 65s (% of people)", "old", 3, 40, 1) + ngNum("Under 18s (% of people)", "young", 10, 50, 1);
-  h += "</table>";
+  if (S.mode == "own") h += "<h2>4. Land and people</h2>" + ngBaseHtml(S);
   h += "<h2>5. Constitution</h2><p>Quick start: ";
   for (var i = 0; i < CONST_PRESETS.length; i++) h += "<button onclick='ngPreset(" + i + ")'>" + CONST_PRESETS[i].name + "</button> ";
   h += "</p><p class='small'>These just fill in the boxes. Mix and match to make your own kind of state, like a federal theocracy with a planned economy or an elected monarchy.</p>";
-  h += constBuilderHtml(S.con, "ng_c_", "ngRead();ngConstSummary()");
   h += "<div id='ng_constsum'>" + constSummaryHtml(ngFakeGame()) + "</div>";
-  h += "<h2>6. Political parties</h2><p class='small'>The first party is yours. Economic: 0 = far left, 100 = far right. Social: 0 = traditional, 100 = liberal. Seats are shared out again to fit the legislature.</p>";
+  h += "<details><summary><b>Change every detail of the constitution</b> (25 choices)</summary>" + constBuilderHtml(S.con, "ng_c_", "ngRead();ngConstSummary()") + "</details>";
+  h += "<h2>6. Political parties</h2><details><summary><b>Change the parties</b> (optional, the game already made some that fit)</summary><p class='small'>The first party is yours. Economic: 0 = far left, 100 = far right. Social: 0 = traditional, 100 = liberal. Seats are shared out again to fit the legislature.</p>";
   h += "<table class='data'><tr><th>Party</th><th>Economic</th><th>Social</th><th>Colour</th><th>Seats now</th><th>In government</th><th></th></tr>";
   for (var i = 0; i < S.parties.length; i++) {
     var p = S.parties[i];
@@ -4988,13 +5089,14 @@ PAGES.newgame = function () {
   }
   h += "</table>";
   if (S.parties.length < 10) h += "<p><button onclick='ngAddParty()'>+ Add a party</button></p>";
+  h += "</details>";
   var seatSum = sum(S.parties.map(function (p) { return parseInt(p.seats) || 0; }));
   if (seatSum != S.con.seats) h += "<p class='small'>Party seats add up to " + seatSum + " but the legislature has " + esc(S.con.seats) + ". They'll be scaled to fit.</p>";
   h += "<h2>7. Last bits</h2><table class='data'>";
   h += "<tr><th>Difficulty</th><td><select id='ng_diff'>" + ["story|Story - more money, more forgiving", "standard|Standard", "hard|Hard - weaker finances, less trust", "sandbox|Sandbox - you can't be removed"].map(function (o) { var a = o.split("|"); return "<option value='" + a[0] + "'" + (S.difficulty == a[0] ? " selected" : "") + ">" + a[1] + "</option>"; }).join("") + "</select></td></tr>";
   h += "<tr><th>Random seed</th><td><input type='number' id='ng_seed' value='" + esc(S.seed) + "' style='width:90px'> <span class='small'>Same seed + same decisions = same game</span></td></tr>";
   h += "</table>";
-  h += "<p><button class='big' onclick='startNewGame()'>Take office &raquo;</button> <button onclick='ngState=ngDefaults(ngState.template);ngRedraw()'>Reset form</button></p>";
+  h += "<p><button class='big' onclick='startNewGame()'>Take office &raquo;</button> <button onclick='ngState=null;ngRedraw()'>Reset form</button></p>";
   h += "<p class='small'>Or <a href='#settings'>load a saved game</a>. Need help? Read <a href='#help'>How to play</a>.</p></div>";
   return h;
 };
@@ -5053,14 +5155,13 @@ function ngRead() {
   if (!$("ng_name")) return;
   var keys = ["name", "capital", "currency", "symbol", "languages", "motto", "leader", "party"];
   for (var i = 0; i < keys.length; i++) S[keys[i]] = $("ng_" + keys[i]).value;
-  var nums = ["gdpPerCap", "debt", "unemp", "infl", "old", "young"];
-  for (var i = 0; i < nums.length; i++) S[nums[i]] = parseFloat($("ng_" + nums[i]).value);
   for (var i = 0; i < S.flag.length; i++) if ($("ng_fc" + i)) S.flag[i] = $("ng_fc" + i).value;
   S.flagVertical = $("ng_fvert").checked;
-  for (var i = 0; i < S.regions.length; i++) S.regions[i] = { name: $("ng_rn" + i).value, pop: parseFloat($("ng_rp" + i).value), income: parseFloat($("ng_ri" + i).value) };
-  readConstForm("ng_c_", S.con);
+  if (S.mode == "own") for (var i = 0; i < 10; i++) if ($("ng_rn" + i)) S.regionNames[i] = $("ng_rn" + i).value;
+  if ($("ng_c_executive")) readConstForm("ng_c_", S.con);
   for (var i = 0; i < S.parties.length; i++) {
     var p = S.parties[i];
+    if (!$("ng_pe" + i)) continue;
     if (i > 0) p.name = $("ng_pn" + i).value;
     p.econ = parseFloat($("ng_pe" + i).value); p.social = parseFloat($("ng_ps" + i).value);
     p.color = $("ng_pc" + i).value; p.seats = parseInt($("ng_pseat" + i).value) || 1;
@@ -5069,7 +5170,7 @@ function ngRead() {
   S.difficulty = $("ng_diff").value; S.seed = $("ng_seed").value;
 }
 function ngRedraw() { var y = window.scrollY; route(); window.scrollTo(0, y); }
-function ngPickTemplate(k) { if (!confirm("Fill the form with " + TEMPLATES[k].name + "'s numbers? Your changes below will be replaced.")) { ngRedraw(); return; } ngState = ngDefaults(k); ngRedraw(); }
+function ngPickTemplate(k) { if (!confirm("Fill the form with " + TEMPLATES[k].name + "'s numbers? Your changes below will be replaced.")) { ngRedraw(); return; } ngState = ngDefaults(k); ngState.mode = "ready"; ngRedraw(); }
 function ngAddRegion() { ngRead(); ngState.regions.push({ name: "New Province", pop: 1, income: 1 }); ngRedraw(); }
 function ngDelRegion(i) { ngRead(); ngState.regions.splice(i, 1); ngRedraw(); }
 function ngAddParty() { ngRead(); var n = ngState.parties.length; ngState.parties.push({ name: "New Party " + n, econ: 50, social: 50, color: "#888888", seats: 5, inGov: false }); ngRedraw(); }
@@ -5112,6 +5213,14 @@ function startNewGame() {
   };
   for (var k in opts) if (opts[k] === "") delete opts[k];
   var cu = {};
+  if (S.mode == "own") {
+    var W = ngWorkOut(S);
+    S.regions = W.regions; S.gdpPerCap = W.gdpPerCap; S.debt = W.debt; S.unemp = W.unemp; S.infl = W.infl; S.old = W.old; S.young = W.young;
+    cu.policyRate = Math.round((W.infl / 100 + 0.01) * 1000) / 1000;
+    cu.cbTarget = Math.round(clamp(W.infl / 200, 0.02, 0.05) * 1000) / 1000;
+    cu.birthRate = W.birthRate; cu.deathRate = W.deathRate; cu.importShare = W.importShare;
+    D = { regions: [], gdpPerCap: -1, debt: -1, unemp: -1, infl: -1, old: -1, young: -1, parties: D.parties, party: D.party };
+  }
   if (JSON.stringify(S.regions) != JSON.stringify(D.regions)) cu.regions = S.regions;
   if (S.gdpPerCap != D.gdpPerCap) cu.gdpPerCap = S.gdpPerCap;
   if (S.debt != D.debt) cu.debtRatio = S.debt / 100;
@@ -5120,7 +5229,8 @@ function startNewGame() {
   if (S.old != D.old) cu.oldShare = S.old / 100;
   if (S.young != D.young) cu.youngShare = S.young / 100;
   opts.custom = cu;
-  var pp = S.parties.map(function (p, i) { return { name: i == 0 ? S.party : p.name, econ: p.econ, social: p.social, color: p.color, seats: p.seats, inGov: p.inGov }; });
+  var oldShort = ngShort(TEMPLATES[key].name), newShort = ngShort(S.name);
+  var pp = S.parties.map(function (p, i) { return { name: i == 0 ? S.party : (newShort && oldShort != newShort ? p.name.split(oldShort).join(newShort) : p.name), econ: p.econ, social: p.social, color: p.color, seats: p.seats, inGov: p.inGov }; });
   var dp = D.parties.map(function (p, i) { return { name: i == 0 ? D.party : p.name, econ: p.econ, social: p.social, color: p.color, seats: p.seats, inGov: p.inGov }; });
   if (JSON.stringify(pp) != JSON.stringify(dp)) opts.parties = pp;
   try {
@@ -5271,6 +5381,7 @@ function doPeace(terms) {
   autosave();
   route();
 }
+function ngShort(n) { n = String(n || "").trim(); var i = n.lastIndexOf(" of "); return i >= 0 ? n.slice(i + 4) : n; }
 </script>
 <script>
 var lbState = null;
